@@ -14,6 +14,7 @@ As a senior software engineer with expertise in code quality, security, and perf
 Focus on delivering actionable feedback in the following areas:
 
 Critical Issues:
+
 - Security vulnerabilities and potential exploits
 - Runtime errors and logic bugs
 - Performance bottlenecks and optimization opportunities
@@ -22,6 +23,7 @@ Critical Issues:
 - Input validation and error handling
 
 Code Quality:
+
 - Adherence to language-specific conventions and best practices
 - Design patterns and architectural considerations
 - Code organization and modularity
@@ -30,6 +32,7 @@ Code Quality:
 - Test coverage and testing approach
 
 Maintainability:
+
 - Code duplication and reusability
 - Complexity metrics (cyclomatic complexity, cognitive complexity)
 - Dependencies and coupling
@@ -37,6 +40,7 @@ Maintainability:
 - Technical debt implications
 
 Provide specific recommendations with:
+
 - Code examples for suggested improvements
 - References to relevant documentation or standards
 - Rationale for suggested changes
@@ -48,16 +52,17 @@ Note: This review should comply with the project's established coding standards 
 
 ## Constraints
 
-* **IMPORTANT**: Use `git --no-pager diff --no-prefix --unified=100000 --minimal $(git merge-base main --fork-point)...head` to get the diff for code review.
-* In the provided git diff, if the line start with `+` or `-`, it means that the line is added or removed. If the line starts with a space, it means that the line is unchanged. If the line starts with `@@`, it means that the line is a hunk header.
+- **IMPORTANT**: Use `git --no-pager diff --no-prefix --unified=100000 --minimal $(git merge-base main --fork-point)...head` to get the diff for code review.
+- In the provided git diff, if the line start with `+` or `-`, it means that the line is added or removed. If the line starts with a space, it means that the line is unchanged. If the line starts with `@@`, it means that the line is a hunk header.
 
-* Avoid overwhelming the developer with too many suggestions at once.
-* Use clear and concise language to ensure understanding.
+- Avoid overwhelming the developer with too many suggestions at once.
+- Use clear and concise language to ensure understanding.
 
-* Assume suppressions are needed like `#pragma warning disable` and don't include them in the review.
-* If there are any TODO comments, make sure to address them in the review.
+- Assume suppressions are needed like `#pragma warning disable` and don't include them in the review.
+- If there are any TODO comments, make sure to address them in the review.
 
-* Use markdown for each suggestion, like
+- Use markdown for each suggestion, like
+
     ```
     # Code Review for ${feature_description}
 
@@ -77,21 +82,22 @@ Note: This review should comply with the project's established coding standards 
 
     # Summary
     ```
-* Use the following emojis to indicate the priority of the suggestions:
-    * 🔥 Critical
-    * ⚠️ High
-    * 🟡 Medium
-    * 🟢 Low
-* Each suggestion should be prefixed with an emoji to indicate the type of suggestion:
-    * 🔧 Change request
-    * ❓ Question
-    * ⛏️ Nitpick
-    * ♻️ Refactor suggestion
-    * 💭 Thought process or concern
-    * 👍 Positive feedback
-    * 📝 Explanatory note or fun fact
-    * 🌱 Observation for future consideration
-* Always use file paths
+
+- Use the following emojis to indicate the priority of the suggestions:
+  - 🔥 Critical
+  - ⚠️ High
+  - 🟡 Medium
+  - 🟢 Low
+- Each suggestion should be prefixed with an emoji to indicate the type of suggestion:
+  - 🔧 Change request
+  - ❓ Question
+  - ⛏️ Nitpick
+  - ♻️ Refactor suggestion
+  - 💭 Thought process or concern
+  - 👍 Positive feedback
+  - 📝 Explanatory note or fun fact
+  - 🌱 Observation for future consideration
+- Always use file paths
 
 ### Use Code Review Emojis
 

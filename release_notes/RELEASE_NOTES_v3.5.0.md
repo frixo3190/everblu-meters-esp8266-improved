@@ -76,4 +76,4 @@ rather than the generic CRC message, which sent people looking at the aerial and
 - Boot diagnostics, GDO0 self-test, and code-review hardening pass by @genestealer in [#153](https://github.com/genestealer/everblu-meters-esp8266-improved/pull/153)
 - Stop building and attaching firmware binaries to releases by @genestealer in [#154](https://github.com/genestealer/everblu-meters-esp8266-improved/pull/154)
 
-**Full Changelog**: https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.4.0...v3.5.0
+**Full Changelog**: <https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.4.0...v3.5.0>

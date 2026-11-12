@@ -42,20 +42,20 @@ For the complete entry, see [CHANGELOG.md](../CHANGELOG.md).
 
 ## What's Changed
 
-* Daily reading by @b4dpxl in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/79
-* Fix malformed README list structure in bottom configuration/advanced sections by @genestealer with @Copilot in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/87
-* feat(cc1101): hardware TX FIFO threshold via GDO2 to prevent TXFIFO_UNDERFLOW - PART A (#83) by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/88
-* feat(cc1101): dynamic GDO2 IOCFG2 reconfiguration for RX FIFO threshold and EOP signalling - PART B (#84) by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/89
-* ci: make workflows on-demand to cut Actions usage by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/92
-* ci: restore continuous PR feedback and broaden workflow triggers by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/94
-* fix(esphome): publish static config + idle states at boot (issue #69) by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/95
-* Suppress verbose per-attempt logging during frequency scans by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/97
-* Feat/radio crystal calibration by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/96
-* Make meter read retries configurable, default 5 by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/98
-* feat(cc1101)!: GDO2 hardware-assisted FIFO threshold management - now the default (BREAKING, v3.0.0) by @genestealer in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/91
+- Daily reading by @b4dpxl in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/79>
+- Fix malformed README list structure in bottom configuration/advanced sections by @genestealer with @Copilot in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/87>
+- feat(cc1101): hardware TX FIFO threshold via GDO2 to prevent TXFIFO_UNDERFLOW - PART A (#83) by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/88>
+- feat(cc1101): dynamic GDO2 IOCFG2 reconfiguration for RX FIFO threshold and EOP signalling - PART B (#84) by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/89>
+- ci: make workflows on-demand to cut Actions usage by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/92>
+- ci: restore continuous PR feedback and broaden workflow triggers by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/94>
+- fix(esphome): publish static config + idle states at boot (issue #69) by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/95>
+- Suppress verbose per-attempt logging during frequency scans by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/97>
+- Feat/radio crystal calibration by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/96>
+- Make meter read retries configurable, default 5 by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/98>
+- feat(cc1101)!: GDO2 hardware-assisted FIFO threshold management - now the default (BREAKING, v3.0.0) by @genestealer in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/91>
 
 ## New Contributors
 
-* @b4dpxl made their first contribution in https://github.com/genestealer/everblu-meters-esp8266-improved/pull/79
+- @b4dpxl made their first contribution in <https://github.com/genestealer/everblu-meters-esp8266-improved/pull/79>
 
-**Full Changelog**: https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v2.3.0...v3.0.0
+**Full Changelog**: <https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v2.3.0...v3.0.0>

@@ -12,7 +12,6 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 Before implementing:
 
-
 - State your assumptions explicitly. If uncertain, ask.
 - If multiple interpretations exist, present them - don't pick silently.
 - If a simpler approach exists, say so. Push back when warranted.
@@ -34,14 +33,12 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 
 **Touch only what you must. Clean up only your own mess.**
 
-
 When editing existing code:
 
 - Don't "improve" adjacent code, comments, or formatting.
 - Don't refactor things that aren't broken.
 - Match existing style, even if you'd do it differently.
 - If you notice unrelated dead code, mention it - don't delete it.
-
 
 When your changes create orphans:
 
@@ -51,7 +48,6 @@ When your changes create orphans:
 The test: Every changed line should trace directly to the user's request.
 
 ## 4. Goal-Driven Execution
-
 
 **Define success criteria. Loop until verified.**
 

@@ -45,4 +45,4 @@ If your CC1101 wiring or bus sharing is marginal, this release may surface it: a
 - Log which meter a frequency scan targets in multi-meter setups by @genestealer in [#147](https://github.com/genestealer/everblu-meters-esp8266-improved/pull/147)
 - Fail radio init when the CC1101 SPI link cannot be trusted by @genestealer in [#150](https://github.com/genestealer/everblu-meters-esp8266-improved/pull/150)
 
-**Full Changelog**: https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.3.0...v3.4.0
+**Full Changelog**: <https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.3.0...v3.4.0>

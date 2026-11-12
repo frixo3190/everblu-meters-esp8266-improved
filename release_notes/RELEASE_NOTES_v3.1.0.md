@@ -50,35 +50,35 @@ Existing YAML keys and MQTT topic names used by prior versions will no longer tr
 ### Main Behavior And Feature Changes Called Out In This Release
 
 - Frequency calibration/scanning improvements:
-	- Two-phase Deep scan behavior and quality guard hardening.
-	- Optional `AUTO_SCAN_ON_FAILURE_ENABLED` flow with immediate retry after successful retune.
-	- Default startup auto-scan disabled (`AUTO_SCAN_ENABLED`/`auto_scan` -> false).
-	- CC1101 RX bandwidth widened (58 kHz -> 270 kHz) with related FOC changes.
+  - Two-phase Deep scan behavior and quality guard hardening.
+  - Optional `AUTO_SCAN_ON_FAILURE_ENABLED` flow with immediate retry after successful retune.
+  - Default startup auto-scan disabled (`AUTO_SCAN_ENABLED`/`auto_scan` -> false).
+  - CC1101 RX bandwidth widened (58 kHz -> 270 kHz) with related FOC changes.
 - MQTT/telemetry updates:
-	- Reset Frequency Offset button/topic in standalone MQTT.
-	- `tuned_frequency` and `frequency_estimate` sensors discovery + publishing fixes.
-	- Timestamped tagged serial log lines.
+  - Reset Frequency Offset button/topic in standalone MQTT.
+  - `tuned_frequency` and `frequency_estimate` sensors discovery + publishing fixes.
+  - Timestamped tagged serial log lines.
 - Decoder/data quality:
-	- RADIAN decoder deduplication to shared implementation.
-	- Reading plausibility guard vs history.
-	- LQI/CRC-bit handling and percentage mapping fixes.
+  - RADIAN decoder deduplication to shared implementation.
+  - Reading plausibility guard vs history.
+  - LQI/CRC-bit handling and percentage mapping fixes.
 - RF/runtime hardening:
-	- Near-field saturation detection warning.
-	- RX mode timeout/recovery in CC1101 state handling.
-	- AGC profile rebalance and attenuation options.
+  - Near-field saturation detection warning.
+  - RX mode timeout/recovery in CC1101 state handling.
+  - AGC profile rebalance and attenuation options.
 - History payload correction:
-	- `monthly_usage` omits oldest month lacking prior delta baseline.
+  - `monthly_usage` omits oldest month lacking prior delta baseline.
 
 ### ESPHome Config Validation And Tests
 
 - New config-time validators in the `everblu_meter` component (fail fast during `esphome config` instead of a later C++ compile error or a silent runtime fallback):
-	- **ESP32 Arduino framework required**: rejects an ESP32 target that is not using `framework: type: arduino` with a clear "requires ESP32 Arduino framework" message (the component depends on Arduino headers). ESP8266 is unaffected.
-	- **GDO0/GDO2 pin conflict**: rejects `gdo0_pin` and `gdo2_pin` set to the same GPIO.
-	- **`reading_schedule` validated and case-insensitive**: previously accepted any string and silently fell back to `Monday-Friday`; now validated against the known presets/weekdays and normalised for case (e.g. `monday-friday` -> `Monday-Friday`).
+  - **ESP32 Arduino framework required**: rejects an ESP32 target that is not using `framework: type: arduino` with a clear "requires ESP32 Arduino framework" message (the component depends on Arduino headers). ESP8266 is unaffected.
+  - **GDO0/GDO2 pin conflict**: rejects `gdo0_pin` and `gdo2_pin` set to the same GPIO.
+  - **`reading_schedule` validated and case-insensitive**: previously accepted any string and silently fell back to `Monday-Friday`; now validated against the known presets/weekdays and normalised for case (e.g. `monday-friday` -> `Monday-Friday`).
 - New test coverage for all component config validators:
-	- Negative `esphome config` fixtures (`.ci/esphome/everblu_meter/test.invalid-*.yaml`) that must be rejected.
-	- Python unit tests (`tests/esphome/test_validators.py`, 27 cases) calling the validators directly.
-	- New CI jobs `negative-validation` and `python-unit-tests` in the ESPHome external-component workflow.
+  - Negative `esphome config` fixtures (`.ci/esphome/everblu_meter/test.invalid-*.yaml`) that must be rejected.
+  - Python unit tests (`tests/esphome/test_validators.py`, 27 cases) calling the validators directly.
+  - New CI jobs `negative-validation` and `python-unit-tests` in the ESPHome external-component workflow.
 
 ### CI/Tooling: ESPHOME-release Auto-Sync On pre-commit.ci
 

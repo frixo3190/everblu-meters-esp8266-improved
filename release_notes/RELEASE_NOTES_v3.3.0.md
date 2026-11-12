@@ -59,4 +59,4 @@ The embedded unit suite now runs on the host, and new native suites cover `Meter
 - Classify read failures and fix frequency-scan stack corruption by @genestealer in [#138](https://github.com/genestealer/everblu-meters-esp8266-improved/pull/138)
 - Address PR 138 review: classify unattempted reads, harden the CI variant, align the cooldown by @genestealer in [#141](https://github.com/genestealer/everblu-meters-esp8266-improved/pull/141)
 
-**Full Changelog**: https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.2.0...v3.3.0
+**Full Changelog**: <https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.2.0...v3.3.0>

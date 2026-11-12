@@ -71,3 +71,7 @@ issue-58-reply.md
 # ESPHome build output from scripts/test_build_components
 .esphome/
 .ci/esphome/*/.gitignore
+
+# ESPHome secrets (Wi-Fi, API, OTA)
+secrets.yaml
+*.secrets.yaml

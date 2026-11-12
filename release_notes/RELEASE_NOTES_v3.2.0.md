@@ -60,4 +60,4 @@ See `docs/METER_CAPTURE_AND_CI_TESTING.md`.
 
 - Validate RADIAN CRC, decode meter clock/type, add offline decoder tests by @genestealer in [#134](https://github.com/genestealer/everblu-meters-esp8266-improved/pull/134)
 
-**Full Changelog**: https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.1.1...v3.2.0
+**Full Changelog**: <https://github.com/genestealer/everblu-meters-esp8266-improved/compare/v3.1.1...v3.2.0>

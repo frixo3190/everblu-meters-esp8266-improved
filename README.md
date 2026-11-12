@@ -43,7 +43,7 @@ Two independent deployment targets share the same core radio/protocol logic:
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents**
 
-  - [**ESPHome** - Release V3.0.0](#esphome---release-v300)
+- [**ESPHome** - Release V3.0.0](#esphome---release-v300)
 - [Features](#features)
   - [Full feature list](#full-feature-list)
   - [Advanced Frame Validation](#advanced-frame-validation)

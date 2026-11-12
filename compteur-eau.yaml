@@ -1,0 +1,172 @@
+# =============================================================================
+# Compteur d'eau Itron EverBlu Cyble Enhanced RF
+# Carte : ESP32 NodeMCU / DevKitC (ESP32-WROOM-32, CP2102) -> board esp32dev
+#
+# Cablage CC1101 (3.3 V uniquement) :
+#   VCC  -> 3V3          GND  -> GND
+#   SCK  -> GPIO18       MISO -> GPIO19       MOSI -> GPIO23
+#   CSN  -> GPIO25       GDO0 -> GPIO4        GDO2 -> GPIO27
+# =============================================================================
+
+esphome:
+  name: compteur-eau
+  friendly_name: Compteur Eau
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino          # obligatoire pour everblu_meter (pas ESP-IDF)
+
+logger:
+  level: DEBUG
+
+# Clé de chiffrement générée automatiquement - voir secrets.yaml
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Compteur-Eau Fallback"
+    password: !secret fallback_password
+
+captive_portal:
+
+# Heure fournie par Home Assistant (necessaire a la planification)
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: Europe/Paris
+
+# Bus SPI materiel du CC1101
+spi:
+  id: main_bus
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+# Composant local (dossier ESPHOME-release du depot), pas de dependance reseau
+external_components:
+  - source:
+      type: local
+      path: ESPHOME-release
+    components: [everblu_meter]
+
+everblu_meter:
+  id: compteur_eau
+  spi_id: main_bus
+
+  # Code imprime sous le code-barres du compteur : YY-SSSSSSS-NNN
+  meter_code: "13-0685444-219"
+  meter_type: water
+
+  cs_pin: GPIO25
+  gdo0_pin: GPIO4
+  # GDO2 : OBLIGATOIRE depuis la v3.0.0 (gestion materielle du FIFO).
+  # Si GDO2 n'est pas cable, retirer cette ligne ET decommenter l'opt-out ci-dessous.
+  gdo2_pin: GPIO27
+  # disable_gdo2_fifo_management: true   # opt-out legacy SPI polling (non recommande)
+
+  time_id: ha_time
+
+  # Planification : offset fixe en minutes depuis UTC (pas d'auto-DST)
+  # 60 = hiver (UTC+1), 120 = ete (UTC+2)
+  timezone_offset: 60
+  auto_align_time: true
+
+  # Lecture immediate apres synchro de l'heure : pratique pour le premier test.
+  # A commenter/retirer une fois le montage valide.
+  initial_read_on_boot: true
+
+  # Boutons
+  request_reading_button:
+    name: "Lire le compteur maintenant"
+  deep_scan_button:
+    name: "Scan frequentiel profond"
+  reset_frequency_button:
+    name: "Reinitialiser offset frequence"
+  stop_reading_button:
+    name: "Arreter la lecture"
+  diagnostic_report_button:
+    name: "Rapport diagnostic"
+
+  # Volume (litres, device_class water)
+  volume:
+    name: "Volume compteur"
+    device_class: water
+    state_class: total_increasing
+
+  counter:
+    name: "Compteur de lectures"
+
+  battery:
+    name: "Piles compteur (mois)"
+
+  # Qualite radio
+  rssi:
+    name: "RSSI compteur"
+  rssi_percentage:
+    name: "RSSI pourcentage"
+  lqi:
+    name: "LQI compteur"
+  lqi_percentage:
+    name: "LQI pourcentage"
+
+  # Statistiques
+  total_attempts:
+    name: "Tentatives de lecture"
+  successful_reads:
+    name: "Lectures reussies"
+  failed_reads:
+    name: "Lectures echouees"
+  frequency_offset:
+    name: "Offset frequence"
+  tuned_frequency:
+    name: "Frequence accordee (MHz)"
+  frequency_estimate:
+    name: "Estimation frequence"
+  gdo2_timeouts:
+    name: "Timeouts GDO2"
+
+  # Champs lus dans la trame
+  meter_serial_sensor:
+    name: "Numero de serie"
+  meter_year_sensor:
+    name: "Annee compteur"
+  meter_clock_sensor:
+    name: "Horloge compteur"
+  meter_model_sensor:
+    name: "Modele compteur"
+  reading_schedule_sensor:
+    name: "Planning de lecture"
+  reading_time_utc_sensor:
+    name: "Heure de lecture (UTC)"
+  time_start:
+    name: "Debut fenetre de reveil"
+  time_end:
+    name: "Fin fenetre de reveil"
+
+  # Statut / diagnostic
+  status:
+    name: "Statut"
+  error:
+    name: "Derniere erreur"
+  radio_state:
+    name: "Etat radio"
+  timestamp:
+    name: "Derniere lecture"
+  history_json:
+    name: "Historique (JSON)"
+  firmware_version:
+    name: "Version firmware"
+
+  active_reading:
+    name: "Lecture en cours"
+  radio_connected:
+    name: "Radio connectee"
