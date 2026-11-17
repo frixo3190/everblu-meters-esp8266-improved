@@ -82,7 +82,7 @@ everblu_meter:
 
   # Lecture immediate apres synchro de l'heure : pratique pour le premier test.
   # A commenter/retirer une fois le montage valide.
-  initial_read_on_boot: true
+  initial_read_on_boot: false
 
   # Boutons
   request_reading_button:
