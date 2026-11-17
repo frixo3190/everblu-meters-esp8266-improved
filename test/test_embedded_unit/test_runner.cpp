@@ -28,6 +28,7 @@ void test_meter_code_parse_rejects_short_serial(void);
 void test_schedule_monday_friday(void);
 void test_schedule_monday_saturday(void);
 void test_schedule_monday_sunday_includes_sunday(void);
+void test_schedule_never_disables_reads(void);
 void test_schedule_monday_only(void);
 void test_schedule_tuesday_only(void);
 void test_schedule_wednesday_only(void);
@@ -107,6 +108,7 @@ int main(int argc, char **argv)
     RUN_TEST(test_schedule_monday_friday);
     RUN_TEST(test_schedule_monday_saturday);
     RUN_TEST(test_schedule_monday_sunday_includes_sunday);
+    RUN_TEST(test_schedule_never_disables_reads);
     RUN_TEST(test_schedule_monday_only);
     RUN_TEST(test_schedule_tuesday_only);
     RUN_TEST(test_schedule_wednesday_only);

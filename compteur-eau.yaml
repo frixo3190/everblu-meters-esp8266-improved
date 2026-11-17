@@ -79,7 +79,7 @@ everblu_meter:
   # 60 = hiver (UTC+1), 120 = ete (UTC+2)
   timezone_offset: 60
   auto_align_time: true
-  reading_schedule: "Monday-Sunday"   # relevé tous les jour
+  reading_schedule: "Never"   # pas de releve automatique : declenchement manuel (bouton / automatisation HA)
   read_hour: 4
   read_minute: 0 
 

@@ -451,6 +451,9 @@ void test_reading_day_gate_covers_every_schedule_string(void)
         {"Monday-Saturday", 14, true}, // Saturday
         {"Monday-Sunday", 8, true},    // Sunday
         {"Monday-Sunday", 14, true},   // Saturday
+        {"Never", 8, false},           // Sunday - scheduled reads disabled
+        {"Never", 10, false},          // Tuesday - scheduled reads disabled
+        {"Never", 14, false},          // Saturday - scheduled reads disabled
         {"Sunday", 8, true},
         {"Sunday", 9, false},
         {"Monday", 9, true},

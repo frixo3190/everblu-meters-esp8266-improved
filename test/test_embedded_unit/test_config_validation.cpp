@@ -21,6 +21,7 @@ void test_valid_reading_schedules(void)
     TEST_ASSERT_TRUE(ScheduleManager::isValidSchedule("Monday-Friday"));
     TEST_ASSERT_TRUE(ScheduleManager::isValidSchedule("Monday-Saturday"));
     TEST_ASSERT_TRUE(ScheduleManager::isValidSchedule("Monday-Sunday"));
+    TEST_ASSERT_TRUE(ScheduleManager::isValidSchedule("Never"));
     TEST_ASSERT_TRUE(ScheduleManager::isValidSchedule("Monday"));
     TEST_ASSERT_TRUE(ScheduleManager::isValidSchedule("Tuesday"));
     TEST_ASSERT_TRUE(ScheduleManager::isValidSchedule("Wednesday"));
@@ -55,7 +56,7 @@ void test_invalid_reading_schedules(void)
 void test_both_schedule_validators_agree(void)
 {
     static const char *const candidates[] = {
-        "Monday-Friday", "Monday-Saturday", "Monday-Sunday",
+        "Monday-Friday", "Monday-Saturday", "Monday-Sunday", "Never",
         "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
         "Daily", "Weekdays", "Weekend", "", " ", "monday", "MONDAY",
         "Monday-Thursday", "Monday ", " Monday", "Sunday-Monday"};

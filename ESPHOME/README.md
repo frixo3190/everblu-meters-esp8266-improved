@@ -286,7 +286,7 @@ esp32:
 | `frequency`          | float    | 433.82        | No       | RF frequency (MHz)                                                                                                                                                                                                                           |
 | `auto_scan`          | bool     | false         | No       | Auto frequency scan                                                                                                                                                                                                                          |
 | `auto_scan_on_failure` | bool   | true          | No       | Auto frequency scan (once) after read attempts keep failing and the component enters cooldown, to recover from carrier-frequency drift                                                                                                       |
-| `reading_schedule`   | string   | Monday-Friday | No       | Reading schedule. Presets: `Monday-Friday`, `Monday-Saturday`, `Monday-Sunday`, or any single day name                                                                                                                                       |
+| `reading_schedule`   | string   | Monday-Friday | No       | Reading schedule. Presets: `Monday-Friday`, `Monday-Saturday`, `Monday-Sunday`, or any single day name. Use `Never` to disable scheduled reads and trigger them manually (button / Home Assistant automation).                                                                 |
 | `read_hour`          | int      | 10            | No       | Read hour (0-23)                                                                                                                                                                                                                             |
 | `read_minute`        | int      | 0             | No       | Read minute (0-59)                                                                                                                                                                                                                           |
 | `timezone_offset`    | int      | 0             | No       | Local time offset from UTC in **minutes**. Examples: `60` = UTC+1, `-300` = UTC-5, `330` = UTC+5:30. Applied to scheduling; does **not** auto-adjust for DST.                                                                               |
@@ -306,6 +306,7 @@ esp32:
 - Monday-Friday - Weekdays (default)
 - Monday-Saturday - Monday through Saturday
 - Monday-Sunday - All days
+- Never - No scheduled reads; trigger readings manually via the button or a Home Assistant automation
 - Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday - Read only on the selected day
 
 ### Custom Schedule Example

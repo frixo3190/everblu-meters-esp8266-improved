@@ -1,0 +1,542 @@
+/**
+ * @file everblu_meter.cpp
+ * @brief Implementation of ESPHome component for EverBlu Cyble Enhanced meters
+ */
+
+#include "everblu_meter.h"
+#ifndef __INTELLISENSE__
+#include "esphome/core/log.h"
+#endif
+
+#include "version.h"
+
+// Include CC1101 header for SPI device setup
+#include "cc1101.h"
+namespace esphome {
+namespace everblu_meter {
+
+static const char *const TAG = "everblu_meter";
+
+namespace {
+// Render a pin as e.g. "GPIO3" into caller-supplied storage, or return the fallback text
+// when the pin is unset. Uses the buffer-based dump_summary(); the std::string overload is
+// deprecated and is removed in ESPHome 2026.7.0.
+const char *pin_summary(GPIOPin *pin, char *buffer, size_t len, const char *fallback) {
+  if (pin == nullptr)
+    return fallback;
+  pin->dump_summary(buffer, len);
+  return buffer;
+}
+}  // namespace
+
+// ESPHome's documented guidance is that a component's loop() should block for at
+// most ~30 ms (https://developers.esphome.io/architecture/components/); the
+// runtime "took a long time" warning in recent releases fires at ~2550 ms.
+//
+// A CC1101 meter interrogation is an INHERENTLY ATOMIC ~3.3 s RF transaction that
+// cannot be split into sub-budget loop() slices on this single-threaded MCU
+// (investigated in issue #93):
+//   - The mandatory ~2 s wake-up burst must continuously refill the 64-byte TX
+//     FIFO (drains in ~186 ms), so loop() cannot return mid-burst.
+//   - The meter answers ONCE in a fixed, non-retransmitted window immediately
+//     after TX (ACK ~45 ms later); yielding before RX would miss the reply.
+//   - The RX FIFO is 64 bytes and fills in ~53 ms at the oversampled rate, so it
+//     must be drained continuously - it cannot buffer across a yield.
+// The shared radio code in src/core/cc1101.cpp feeds the watchdog and yield()s
+// throughout, so WiFi/API/OTA keep being serviced and no watchdog reset occurs;
+// the only artifacts are a benign loop-time warning and a brief API stall during
+// the infrequent, scheduled read. This threshold is therefore kept only as a
+// low-noise DEBUG diagnostic that surfaces the (expected, bounded) block duration.
+static const uint32_t LOOP_BLOCK_WARN_MS = 30;
+
+void EverbluMeterTriggerButton::press_action() {
+  if (this->parent_ == nullptr) {
+    ESP_LOGW(TAG, "Trigger button pressed but parent not set");
+    return;
+  }
+
+  if (this->is_stop_) {
+    this->parent_->request_stop_reading();
+  } else if (this->is_deep_scan_) {
+    this->parent_->request_deep_scan();
+  } else if (this->is_reset_frequency_) {
+    this->parent_->request_reset_frequency();
+  } else if (this->is_diagnostic_) {
+    this->parent_->request_diagnostic_report();
+  } else {
+    this->parent_->request_manual_read();
+  }
+}
+
+void EverbluMeterComponent::setup() {
+  ESP_LOGCONFIG(TAG, "Setting up");
+
+  // Initialize ESPHome SPI device before any SPI transactions
+  this->spi_setup();
+
+  // Reset initialization state on every setup (after reboot/OTA)
+  this->meter_initialized_ = false;
+  this->wifi_ready_at_ = 0;
+
+  // Create config provider and configure it
+  this->config_provider_ = new ESPHomeConfigProvider();
+  this->config_provider_->setMeterYear(this->meter_year_);
+  this->config_provider_->setMeterSerial(this->meter_serial_);
+  this->config_provider_->setMeterType(this->is_gas_);
+  this->config_provider_->setGasVolumeDivisor(this->gas_volume_divisor_);
+  this->config_provider_->setFrequency(this->frequency_);
+  this->config_provider_->setAutoScanEnabled(this->auto_scan_);
+  this->config_provider_->setAutoScanOnFailureEnabled(this->auto_scan_on_failure_);
+  this->config_provider_->setReadingSchedule(this->reading_schedule_.c_str());
+  this->config_provider_->setReadHourUTC(this->read_hour_);
+  this->config_provider_->setReadMinuteUTC(this->read_minute_);
+  this->config_provider_->setTimezoneOffsetMinutes(this->timezone_offset_);
+  this->config_provider_->setAutoAlignReadingTime(this->auto_align_time_);
+  this->config_provider_->setUseAutoAlignMidpoint(this->auto_align_midpoint_);
+  this->config_provider_->setMaxRetries(this->max_retries_);
+  this->config_provider_->setRetryCooldownMs(this->retry_cooldown_ms_);
+
+  // Create time provider
+  if (this->time_component_ != nullptr) {
+    this->time_provider_ = new ESPHomeTimeProvider(this->time_component_);
+  } else {
+    ESP_LOGW(TAG, "No time component configured; some features unavailable");
+    this->time_provider_ = new ESPHomeTimeProvider(nullptr);
+  }
+
+  // Create data publisher and link all sensors
+  this->data_publisher_ = new ESPHomeDataPublisher();
+  this->data_publisher_->set_volume_sensor(this->volume_sensor_);
+  this->data_publisher_->set_battery_sensor(this->battery_sensor_);
+  this->data_publisher_->set_counter_sensor(this->counter_sensor_);
+  this->data_publisher_->set_rssi_sensor(this->rssi_sensor_);
+  this->data_publisher_->set_rssi_percentage_sensor(this->rssi_percentage_sensor_);
+  this->data_publisher_->set_lqi_sensor(this->lqi_sensor_);
+  this->data_publisher_->set_lqi_percentage_sensor(this->lqi_percentage_sensor_);
+  this->data_publisher_->set_time_start_sensor(this->time_start_sensor_);
+  this->data_publisher_->set_time_end_sensor(this->time_end_sensor_);
+  this->data_publisher_->set_total_attempts_sensor(this->total_attempts_sensor_);
+  this->data_publisher_->set_successful_reads_sensor(this->successful_reads_sensor_);
+  this->data_publisher_->set_failed_reads_sensor(this->failed_reads_sensor_);
+  this->data_publisher_->set_frequency_offset_sensor(this->frequency_offset_sensor_);
+  this->data_publisher_->set_tuned_frequency_sensor(this->tuned_frequency_sensor_);
+  this->data_publisher_->set_frequency_estimate_sensor(this->frequency_estimate_sensor_);
+  this->data_publisher_->set_status_sensor(this->status_sensor_);
+  this->data_publisher_->set_error_sensor(this->error_sensor_);
+  this->data_publisher_->set_radio_state_sensor(this->radio_state_sensor_);
+  this->data_publisher_->set_timestamp_sensor(this->timestamp_sensor_);
+  this->data_publisher_->set_history_sensor(this->history_sensor_);
+  this->data_publisher_->set_version_sensor(this->version_sensor_);
+  this->data_publisher_->set_meter_serial_sensor(this->meter_serial_sensor_);
+  this->data_publisher_->set_meter_year_sensor(this->meter_year_sensor_);
+  this->data_publisher_->set_meter_clock_sensor(this->meter_clock_sensor_);
+  this->data_publisher_->set_meter_model_sensor(this->meter_model_sensor_);
+  this->data_publisher_->set_reading_schedule_sensor(this->reading_schedule_sensor_);
+  this->data_publisher_->set_reading_time_utc_sensor(this->reading_time_utc_sensor_);
+  this->data_publisher_->set_active_reading_sensor(this->active_reading_sensor_);
+  this->data_publisher_->set_radio_connected_sensor(this->radio_connected_sensor_);
+
+  // Quick diagnostic: report how many sensors were linked
+  int numeric = 0;
+  numeric += (this->volume_sensor_ != nullptr);
+  numeric += (this->battery_sensor_ != nullptr);
+  numeric += (this->counter_sensor_ != nullptr);
+  numeric += (this->rssi_sensor_ != nullptr);
+  numeric += (this->rssi_percentage_sensor_ != nullptr);
+  numeric += (this->lqi_sensor_ != nullptr);
+  numeric += (this->lqi_percentage_sensor_ != nullptr);
+  numeric += (this->time_start_sensor_ != nullptr);
+  numeric += (this->time_end_sensor_ != nullptr);
+  numeric += (this->total_attempts_sensor_ != nullptr);
+  numeric += (this->successful_reads_sensor_ != nullptr);
+  numeric += (this->failed_reads_sensor_ != nullptr);
+  numeric += (this->frequency_offset_sensor_ != nullptr);
+
+  int texts = 0;
+  texts += (this->status_sensor_ != nullptr);
+  texts += (this->error_sensor_ != nullptr);
+  texts += (this->radio_state_sensor_ != nullptr);
+  texts += (this->timestamp_sensor_ != nullptr);
+  texts += (this->history_sensor_ != nullptr);
+  texts += (this->version_sensor_ != nullptr);
+  texts += (this->meter_serial_sensor_ != nullptr);
+  texts += (this->meter_year_sensor_ != nullptr);
+  texts += (this->reading_schedule_sensor_ != nullptr);
+  texts += (this->reading_time_utc_sensor_ != nullptr);
+
+  int binaries = 0;
+  binaries += (this->active_reading_sensor_ != nullptr);
+  binaries += (this->radio_connected_sensor_ != nullptr);
+
+  ESP_LOGD(TAG, "Linked sensors -> numeric: %d, text: %d, binary: %d", numeric, texts, binaries);
+
+  // Initialize CC1101 context before creating meter reader
+  this->apply_radio_context();
+
+  // Probe the SPI link now rather than waiting for the meter reader to be initialised on
+  // the first Home Assistant connection. A stuck MISO or a wrong cs_pin/miso_pin is a hard
+  // wiring fault, and users routinely capture only the boot log; deferring the check meant
+  // those reports contained no evidence of it at all. The result is reported by
+  // dump_config() and the failure guidance is logged by the driver.
+  this->spi_probe_ran_ = true;
+  this->spi_link_ok_ = cc1101_probe_spi_link(&this->spi_partnum_, &this->spi_version_);
+
+  // Create meter reader with all adapters (but don't initialize yet)
+  this->meter_reader_ = new MeterReader(this->config_provider_, this->time_provider_, this->data_publisher_);
+
+  // Publish static configuration and clean initial states at boot so consumers
+  // (display lambdas, automations, other components) never read uninitialised
+  // sensor values before the meter reader is initialised / the first read (issue #69).
+  this->publish_boot_states();
+
+  ESP_LOGCONFIG(TAG, "Setup complete; meter init deferred until connected");
+}
+
+void EverbluMeterComponent::publish_boot_states() {
+  if (this->data_publisher_ == nullptr) {
+    return;
+  }
+
+  ESP_LOGD(TAG, "Publishing boot-time states (static config + idle placeholders)");
+
+  // Static configuration values are known at boot and never change. Publishing
+  // them here ensures meter year/serial/schedule/frequency are valid from the
+  // start rather than holding uninitialised state.
+  char reading_time_buf[6];
+  snprintf(reading_time_buf, sizeof(reading_time_buf), "%02d:%02d", this->read_hour_, this->read_minute_);
+  this->data_publisher_->publishMeterSettings(this->meter_year_, this->meter_serial_, this->reading_schedule_.c_str(),
+                                              reading_time_buf, this->frequency_);
+  this->data_publisher_->publishFirmwareVersion(EVERBLU_FW_VERSION);
+
+  // Sensible idle placeholders for status text sensors until the radio is
+  // initialised and the first read completes. If radio init later fails,
+  // begin()/republish_initial_states() will overwrite these with the error state.
+  this->data_publisher_->publishRadioState("Idle");
+  this->data_publisher_->publishStatusMessage("Ready");
+  this->data_publisher_->publishError("None");
+  this->data_publisher_->publishActiveReading(false);
+}
+
+void EverbluMeterComponent::republish_initial_states() {
+  if (!this->meter_reader_ || !this->meter_initialized_) {
+    ESP_LOGW(TAG, "Cannot republish states: meter_initialized=%d, meter_reader=%p", this->meter_initialized_,
+             this->meter_reader_);
+    return;
+  }
+
+  ESP_LOGD(TAG, "Republishing initial states");
+
+  // Publish static configuration values that are known at boot
+  // These never change and should always be available
+  if (this->data_publisher_) {
+    // Publish meter configuration (serial, year, schedule, reading time)
+    char reading_time_buf[6];
+    snprintf(reading_time_buf, sizeof(reading_time_buf), "%02d:%02d", this->read_hour_, this->read_minute_);
+    this->data_publisher_->publishMeterSettings(this->meter_year_, this->meter_serial_, this->reading_schedule_.c_str(),
+                                                reading_time_buf, this->frequency_);
+
+    // Publish initial status states
+    // Preserve radio state after init failure - don't overwrite "unavailable" with "Idle"
+    if (this->meter_reader_->isRadioConnected()) {
+      ESP_LOGD(TAG, "Publishing: radio state=Idle");
+      this->data_publisher_->publishRadioState("Idle");
+    } else {
+      ESP_LOGD(TAG, "Skipping radio state publish - radio init failed, preserving 'unavailable' state");
+    }
+
+    if (this->meter_reader_->isRadioConnected()) {
+      ESP_LOGD(TAG, "Publishing: status=Ready");
+      this->data_publisher_->publishStatusMessage("Ready");
+
+      ESP_LOGD(TAG, "Publishing: error=None");
+      this->data_publisher_->publishError("None");
+    } else {
+      ESP_LOGD(TAG, "Skipping Ready/None publish - preserving radio init error state");
+    }
+
+    ESP_LOGD(TAG, "Publishing: firmware version=%s", EVERBLU_FW_VERSION);
+    this->data_publisher_->publishFirmwareVersion(EVERBLU_FW_VERSION);
+
+    ESP_LOGD(TAG, "Publishing: active_reading=false");
+    this->data_publisher_->publishActiveReading(false);
+
+    ESP_LOGD(TAG, "Republish complete - meter readings will be available after first successful read");
+  } else {
+    ESP_LOGW(TAG, "Cannot republish: data_publisher is null");
+  }
+}
+
+void EverbluMeterComponent::loop() {
+  // Let the meter reader handle its periodic tasks
+  if (this->meter_reader_ != nullptr) {
+    // Ensure this instance's SPI and GDO0 settings are active before any radio operations.
+    this->apply_radio_context();
+
+#ifdef USE_API
+    // Initialize meter reader when Home Assistant connects (ensures safe boot sequence)
+    // This is better than WiFi-only check because API connection is more stable
+    if (esphome::api::global_api_server != nullptr) {
+      // Use is_connected_with_state_subscription() to check for state subscription (HA is actively monitoring)
+      bool is_ha_connected = esphome::api::global_api_server->is_connected_with_state_subscription();
+
+      // Initialize meter reader if not already done
+      if (!this->meter_initialized_ && is_ha_connected) {
+        ESP_LOGI(TAG, "Home Assistant connected, initializing meter reader");
+        this->apply_radio_context();
+        this->meter_reader_->begin();
+
+        // Set adaptive frequency tracking threshold
+        FrequencyManager::setAdaptiveThreshold(this->adaptive_threshold_);
+
+        this->meter_initialized_ = true;
+        ESP_LOGI(TAG, "Meter reader initialized successfully");
+      }
+
+      // Republish initial states when HA connects (if already initialized)
+      // (initial publishes may happen before HA is ready to receive)
+      if (this->meter_initialized_ && is_ha_connected && !this->last_api_client_count_) {
+        ESP_LOGI(TAG, "Home Assistant connected, republishing initial states");
+        this->republish_initial_states();
+        if (this->meter_reader_ != nullptr) {
+          this->meter_reader_->setHAConnected(true);
+        }
+        this->last_api_client_count_ = true;
+      } else if (!is_ha_connected) {
+        if (this->meter_reader_ != nullptr) {
+          this->meter_reader_->setHAConnected(false);
+        }
+        this->last_api_client_count_ = false;
+      }
+    }
+#endif
+
+    // Optionally kick off a first read once time is synced so users see data without waiting
+    // Controlled by initial_read_on_boot_ (default: disabled to avoid boot-time blocking when meter is absent)
+    if (this->initial_read_on_boot_ && !this->initial_read_triggered_ && this->time_provider_ != nullptr &&
+        this->time_provider_->isTimeSynced()) {
+      this->initial_read_triggered_ = true;
+      this->meter_reader_->triggerReading(false);
+    }
+
+    // Measure how long the radio read path blocks the ESPHome main loop. An active
+    // CC1101 interrogation exceeds LOOP_BLOCK_WARN_MS by a wide margin (multi-second),
+    // but lighter periodic work (schedule checks, stats publishing) can also cross it;
+    // the call feeds the watchdog and yields internally, so this is a diagnostic
+    // measurement rather than a hard fault (issue #93).
+    uint32_t loop_start = millis();
+    this->meter_reader_->loop();
+    uint32_t loop_elapsed = millis() - loop_start;
+    if (loop_elapsed > LOOP_BLOCK_WARN_MS) {
+      ESP_LOGD(TAG,
+               "meter_reader loop blocked for %lu ms (ESPHome budget %lu ms); multi-second blocks are normal during an "
+               "active RF read",
+               (unsigned long) loop_elapsed, (unsigned long) LOOP_BLOCK_WARN_MS);
+    }
+  }
+
+  // Publish the GDO2 stuck-timeout diagnostic only when it changes. A rising value
+  // indicates a miswired / disconnected GDO2 rather than an RF/meter problem.
+  if (this->gdo2_timeouts_sensor_ != nullptr) {
+    uint32_t timeouts = cc1101_get_gdo2_timeout_count();
+    if (timeouts != this->last_gdo2_timeouts_published_) {
+      this->last_gdo2_timeouts_published_ = timeouts;
+      this->gdo2_timeouts_sensor_->publish_state(static_cast<float>(timeouts));
+    }
+  }
+}
+
+void EverbluMeterComponent::request_manual_read() {
+  if (this->meter_reader_ == nullptr) {
+    ESP_LOGW(TAG, "Manual read ignored: meter reader not ready");
+    return;
+  }
+
+  ESP_LOGI(TAG, "Manual read requested via button");
+  this->apply_radio_context();
+  this->meter_reader_->triggerReading(false);
+}
+
+void EverbluMeterComponent::request_deep_scan() {
+  if (this->meter_reader_ == nullptr) {
+    ESP_LOGW(TAG, "Deep scan ignored: meter reader not ready");
+    return;
+  }
+
+  ESP_LOGI(TAG, "Deep scan requested via button");
+  this->apply_radio_context();
+  this->meter_reader_->performFrequencyScan();
+}
+
+void EverbluMeterComponent::request_reset_frequency() {
+  if (this->meter_reader_ == nullptr) {
+    ESP_LOGW(TAG, "Reset frequency ignored: meter reader not ready");
+    return;
+  }
+
+  ESP_LOGI(TAG, "Reset frequency offset requested via button");
+  this->apply_radio_context();
+  this->meter_reader_->resetFrequencyOffset();
+  ESP_LOGI(TAG, "Frequency offset reset to 0.000 kHz");
+}
+
+void EverbluMeterComponent::request_stop_reading() {
+  if (this->meter_reader_ == nullptr) {
+    ESP_LOGW(TAG, "Stop ignored: meter reader not ready");
+    return;
+  }
+
+  ESP_LOGI(TAG, "Stop reading requested via button");
+  this->meter_reader_->stopReading();
+}
+
+void EverbluMeterComponent::request_diagnostic_report() {
+  // Deliberately does not require meter_reader_: the most common reason to press this is
+  // that the radio never came up, and a report is most useful precisely then.
+  this->apply_radio_context();
+
+  char cs_text[GPIO_SUMMARY_MAX_LEN];
+  char gdo0_text[GPIO_SUMMARY_MAX_LEN];
+  char gdo2_text[GPIO_SUMMARY_MAX_LEN];
+
+  // The report body itself lives in the core driver so the ESPHome and MQTT builds emit
+  // identical blocks; only the pin descriptions differ, and ESPHome can say more about a
+  // pin than a bare GPIO number.
+  cc1101_report_context_t ctx;
+  ctx.meter_code = this->meter_code_.c_str();
+  ctx.meter_year = this->meter_year_;
+  ctx.meter_serial = this->meter_serial_;
+  ctx.is_gas = this->is_gas_;
+  ctx.configured_frequency_mhz = this->frequency_;
+  ctx.rx_attenuation_db = this->rx_attenuation_db_;
+  ctx.cs_pin_text = pin_summary(this->cs_, cs_text, sizeof(cs_text), "NOT configured");
+  ctx.gdo0_pin_text = pin_summary(this->gdo0_pin_, gdo0_text, sizeof(gdo0_text), "NOT configured");
+  ctx.gdo2_pin_text = pin_summary(this->gdo2_pin_, gdo2_text, sizeof(gdo2_text), "disabled");
+  ctx.meter_initialised = this->meter_initialized_;
+
+  cc1101_print_diagnostic_report(&ctx);
+}
+
+void EverbluMeterComponent::apply_radio_context() {
+  auto *spi_device = static_cast<spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_POLARITY_LOW,
+                                                spi::CLOCK_PHASE_LEADING, spi::DATA_RATE_1MHZ> *>(this);
+  cc1101_set_spi_device(static_cast<void *>(spi_device));
+
+  if (this->gdo0_pin_ != nullptr) {
+    cc1101_set_gdo0_pin(this->gdo0_pin_->get_pin());
+  } else {
+    // Log error only once to avoid flooding the log
+    if (!this->gdo0_error_logged_) {
+      ESP_LOGE(TAG, "GDO0 pin not configured for CC1101!");
+      this->gdo0_error_logged_ = true;
+    }
+  }
+
+  // GDO2 is optional: when wired and configured, it drives hardware-assisted
+  // TX FIFO threshold detection instead of SPI TXBYTES polling.
+  if (this->gdo2_pin_ != nullptr) {
+    cc1101_set_gdo2_pin(this->gdo2_pin_->get_pin());
+  } else {
+    cc1101_set_gdo2_pin(-1);  // Ensure fallback mode on re-entry
+  }
+
+  // Apply RX attenuation (0 = default, no LNA limiting; 6/12/18 = reduce LNA gain
+  // to prevent front-end saturation when mounted close to the meter).
+  cc1101_set_rx_attenuation(this->rx_attenuation_db_);
+}
+
+void EverbluMeterComponent::update() {
+  // The meter reader handles its own scheduling via loop().
+  // This method is kept for potential future use with update_interval.
+}
+
+void EverbluMeterComponent::dump_config() {
+  // Report the actual GPIO numbers rather than just "configured". A wrong gdo0_pin or
+  // cs_pin is one of the most common setup faults, and support requests almost always
+  // consist of this block alone - without the numbers it cannot be checked against the
+  // board's pinout.
+  char spi_selftest[128];
+  if (!this->spi_probe_ran_) {
+    snprintf(spi_selftest, sizeof(spi_selftest), "not run");
+  } else if (this->spi_link_ok_) {
+    snprintf(spi_selftest, sizeof(spi_selftest), "PASSED (PARTNUM: 0x%02X, VERSION: 0x%02X)", this->spi_partnum_,
+             this->spi_version_);
+  } else {
+    snprintf(spi_selftest, sizeof(spi_selftest),
+             "FAILED (PARTNUM: 0x%02X, VERSION: 0x%02X) - the radio is not being read; see the errors above",
+             this->spi_partnum_, this->spi_version_);
+  }
+
+  char cs_text[GPIO_SUMMARY_MAX_LEN];
+  char gdo0_text[GPIO_SUMMARY_MAX_LEN];
+  char gdo2_text[GPIO_SUMMARY_MAX_LEN];
+
+  // Split across several calls for the same reason request_diagnostic_report() is: the
+  // logger truncates a single message at its transmit buffer (512 bytes by default),
+  // including the line header. As one block this ran to ~480 characters and was cut off
+  // mid-token at "SPI Link Self-Test: PASSED (P", losing the very field that was added so
+  // support requests would contain it. Keep each call well under the limit; do not merge
+  // them back into one.
+  ESP_LOGCONFIG(TAG,
+                "EverBlu Meter:\n"
+                "  Meter Code: %s (year=%u, serial=%lu)\n"
+                "  Meter Type: %s\n"
+                "  Component Version: %s\n"
+                "  Frequency: %.2f MHz\n"
+                "  Auto Scan: %s",
+                this->meter_code_.c_str(), this->meter_year_, (unsigned long) this->meter_serial_,
+                this->is_gas_ ? "Gas" : "Water", EVERBLU_FW_VERSION, this->frequency_,
+                this->auto_scan_ ? "Enabled" : "Disabled");
+  ESP_LOGCONFIG(TAG,
+                "  Reading Schedule: %s\n"
+                "  Read Time: %02d:%02d\n"
+                "  Timezone Offset: %d\n"
+                "  Auto Align Time: %s\n"
+                "  Auto Align Midpoint: %s",
+                this->reading_schedule_.c_str(), this->read_hour_, this->read_minute_, this->timezone_offset_,
+                this->auto_align_time_ ? "Enabled" : "Disabled", this->auto_align_midpoint_ ? "Enabled" : "Disabled");
+  ESP_LOGCONFIG(TAG,
+                "  Max Retries: %d\n"
+                "  Retry Cooldown: %lu ms\n"
+                "  Initial Read On Boot: %s\n"
+                "  RX Attenuation: %d dB",
+                this->max_retries_, this->retry_cooldown_ms_, this->initial_read_on_boot_ ? "Enabled" : "Disabled",
+                this->rx_attenuation_db_);
+  ESP_LOGCONFIG(TAG,
+                "  CS Pin: %s\n"
+                "  GDO0 Pin: %s\n"
+                "  GDO2 Pin: %s",
+                pin_summary(this->cs_, cs_text, sizeof(cs_text), "NOT configured (error)"),
+                pin_summary(this->gdo0_pin_, gdo0_text, sizeof(gdo0_text), "NOT configured (error)"),
+                pin_summary(this->gdo2_pin_, gdo2_text, sizeof(gdo2_text), "disabled (legacy SPI polling fallback)"));
+  ESP_LOGCONFIG(TAG, "  SPI Link Self-Test: %s", spi_selftest);
+  if (this->gdo2_pin_ != nullptr)
+    ESP_LOGCONFIG(TAG, "    GDO2 mode: HW FIFO threshold, TX+RX dynamic");
+  if (this->is_gas_)
+    ESP_LOGCONFIG(TAG, "  Gas Volume Divisor: %d", this->gas_volume_divisor_);
+
+  ESP_LOGCONFIG(TAG, "  Sensors:");
+  LOG_SENSOR("    ", "Volume", this->volume_sensor_);
+  LOG_SENSOR("    ", "Battery", this->battery_sensor_);
+  LOG_SENSOR("    ", "Counter", this->counter_sensor_);
+  LOG_SENSOR("    ", "RSSI", this->rssi_sensor_);
+  LOG_SENSOR("    ", "RSSI Percentage", this->rssi_percentage_sensor_);
+  LOG_SENSOR("    ", "LQI", this->lqi_sensor_);
+  LOG_SENSOR("    ", "LQI Percentage", this->lqi_percentage_sensor_);
+  LOG_TEXT_SENSOR("    ", "Time Start", this->time_start_sensor_);
+  LOG_TEXT_SENSOR("    ", "Time End", this->time_end_sensor_);
+  LOG_SENSOR("    ", "Total Attempts", this->total_attempts_sensor_);
+  LOG_SENSOR("    ", "Successful Reads", this->successful_reads_sensor_);
+  LOG_SENSOR("    ", "Failed Reads", this->failed_reads_sensor_);
+  LOG_SENSOR("    ", "Frequency Offset", this->frequency_offset_sensor_);
+  LOG_SENSOR("    ", "Frequency Estimate", this->frequency_estimate_sensor_);
+  LOG_TEXT_SENSOR("    ", "Status", this->status_sensor_);
+  LOG_TEXT_SENSOR("    ", "Error", this->error_sensor_);
+  LOG_TEXT_SENSOR("    ", "Radio State", this->radio_state_sensor_);
+  LOG_TEXT_SENSOR("    ", "Timestamp", this->timestamp_sensor_);
+  LOG_TEXT_SENSOR("    ", "History", this->history_sensor_);
+  LOG_BINARY_SENSOR("    ", "Active Reading", this->active_reading_sensor_);
+  LOG_BINARY_SENSOR("    ", "Radio Connected", this->radio_connected_sensor_);
+}
+
+}  // namespace everblu_meter
+}  // namespace esphome

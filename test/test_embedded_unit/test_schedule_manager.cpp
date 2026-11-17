@@ -100,6 +100,28 @@ void test_schedule_monday_sunday_includes_sunday(void)
 }
 
 /**
+ * Test: Never disables scheduled reads on every day of the week
+ */
+void test_schedule_never_disables_reads(void)
+{
+    struct tm monday = createTmForDay(1);
+    struct tm tuesday = createTmForDay(2);
+    struct tm wednesday = createTmForDay(3);
+    struct tm thursday = createTmForDay(4);
+    struct tm friday = createTmForDay(5);
+    struct tm saturday = createTmForDay(6);
+    struct tm sunday = createTmForDay(0);
+
+    TEST_ASSERT_FALSE(isReadingDay(&monday, "Never"));
+    TEST_ASSERT_FALSE(isReadingDay(&tuesday, "Never"));
+    TEST_ASSERT_FALSE(isReadingDay(&wednesday, "Never"));
+    TEST_ASSERT_FALSE(isReadingDay(&thursday, "Never"));
+    TEST_ASSERT_FALSE(isReadingDay(&friday, "Never"));
+    TEST_ASSERT_FALSE(isReadingDay(&saturday, "Never"));
+    TEST_ASSERT_FALSE(isReadingDay(&sunday, "Never"));
+}
+
+/**
  * Test: Monday schedule includes Monday
  */
 void test_schedule_monday_only(void)

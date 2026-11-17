@@ -649,6 +649,14 @@ bool MeterReader::isReadingDayForConfiguredSchedule(const struct tm *ptm) const
         schedule = "Monday-Friday";
     }
 
+    // "Never" is an explicit opt-out: no scheduled reads at all, only manual
+    // triggers (button / Home Assistant automation). Handled before the unknown
+    // schedule fallback so it does not log a warning on every schedule check.
+    if (strcmp(schedule, "Never") == 0)
+    {
+        return false;
+    }
+
     const int dayOfWeek = ptm->tm_wday; // 0=Sunday, 1=Monday, ... 6=Saturday
     if (strcmp(schedule, "Monday-Friday") == 0)
     {

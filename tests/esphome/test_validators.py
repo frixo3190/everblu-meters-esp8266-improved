@@ -97,6 +97,8 @@ def test_meter_code_invalid(code):
         ("friday", "Friday"),
         ("Saturday", "Saturday"),
         ("  Monday-Saturday  ", "Monday-Saturday"),
+        ("never", "Never"),
+        ("NEVER", "Never"),
     ],
 )
 def test_reading_schedule_normalizes_case(value, expected):

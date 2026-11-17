@@ -82,8 +82,8 @@ static const unsigned long OFFLINE_LED_BLINK_MS = 500UL;
 #endif
 
 // Define the default reading schedule if missing from the private.h file.
-// Options: presets ("Monday-Friday", "Monday-Saturday", "Monday-Sunday")
-// or a specific day ("Monday" through "Sunday")
+// Options: presets ("Monday-Friday", "Monday-Saturday", "Monday-Sunday"),
+// "Never" (manual triggers only), or a specific day ("Monday" through "Sunday")
 #ifndef DEFAULT_READING_SCHEDULE
 #define DEFAULT_READING_SCHEDULE "Monday-Friday"
 #endif
@@ -1870,7 +1870,7 @@ bool validateConfiguration()
   if (!isValidReadingSchedule(readingSchedule))
   {
     TS_PRINTF("[WARNING] Invalid reading schedule '%s'. Will fall back to 'Monday-Friday'.\n", readingSchedule);
-    EVB_PRINTLN("         Expected: presets ('Monday-Friday', 'Monday-Saturday', 'Monday-Sunday') or a single day ('Monday'..'Sunday')");
+    EVB_PRINTLN("         Expected: presets ('Monday-Friday', 'Monday-Saturday', 'Monday-Sunday'), 'Never', or a single day ('Monday'..'Sunday')");
   }
   else
   {

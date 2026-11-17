@@ -150,8 +150,8 @@ int calculateLQIToPercentage(int lqi);
  * @brief Validate reading schedule string
  *
  * @param schedule Schedule string to validate
- * @return true if schedule is one of: presets ("Monday-Friday", "Monday-Saturday", "Monday-Sunday")
- *         or a specific day ("Monday" through "Sunday")
+ * @return true if schedule is one of: presets ("Monday-Friday", "Monday-Saturday", "Monday-Sunday"),
+ *         "Never" (no scheduled reads), or a specific day ("Monday" through "Sunday")
  */
 bool isValidReadingSchedule(const char *schedule);
 

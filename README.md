@@ -791,6 +791,7 @@ Available options:
 - `"Monday-Friday"`: Queries the meter only on weekdays.
 - `"Monday-Saturday"`: Queries the meter from Monday to Saturday.
 - `"Monday-Sunday"`: Queries the meter every day.
+- `"Never"`: Disables scheduled readings; readings are only triggered manually (Request Reading Now button / Home Assistant automation).
 - `"Monday"`, `"Tuesday"`, `"Wednesday"`, `"Thursday"`, `"Friday"`, `"Saturday"`, `"Sunday"`: Queries the meter only on that day.
 
 Example configuration in `private.h`:

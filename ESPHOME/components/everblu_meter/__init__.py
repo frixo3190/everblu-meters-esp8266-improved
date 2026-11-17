@@ -119,6 +119,9 @@ METER_TYPE_GAS = "gas"
 SCHEDULE_MONDAY_FRIDAY = "Monday-Friday"
 SCHEDULE_MONDAY_SATURDAY = "Monday-Saturday"
 SCHEDULE_MONDAY_SUNDAY = "Monday-Sunday"
+# "Never" disables scheduled reads; readings are then only triggered manually
+# (button / Home Assistant automation).
+SCHEDULE_NEVER = "Never"
 SCHEDULE_SINGLE_DAYS = [
     "Monday",
     "Tuesday",
@@ -133,6 +136,7 @@ VALID_SCHEDULES = [
     SCHEDULE_MONDAY_FRIDAY,
     SCHEDULE_MONDAY_SATURDAY,
     SCHEDULE_MONDAY_SUNDAY,
+    SCHEDULE_NEVER,
     *SCHEDULE_SINGLE_DAYS,
 ]
 # Lowercase -> canonical lookup so YAML values are accepted case-insensitively
@@ -145,7 +149,8 @@ def validate_reading_schedule(value):
 
     The C++ ScheduleManager does a case-sensitive exact match, so map any
     casing (e.g. 'monday-friday', 'FRIDAY') to the canonical form and reject
-    anything that is not a known preset or weekday.
+    anything that is not a known preset or weekday. 'Never' (any casing) is
+    accepted and disables scheduled reads entirely.
     """
     canonical = _SCHEDULE_LOOKUP.get(cv.string(value).strip().lower())
     if canonical is None:

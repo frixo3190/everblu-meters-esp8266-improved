@@ -1,0 +1,438 @@
+/**
+ * @file utils.h
+ * @brief Utility functions for RADIAN protocol and debugging
+ *
+ * IMPORTANT LICENSING NOTICE:
+ * The RADIAN protocol implementation (radian_trx SW) shall not be distributed
+ * nor used for commercial products. It is exposed only to demonstrate CC1101
+ * capability to read water meter indexes. There is no warranty on radian_trx SW.
+ */
+
+#include <Arduino.h>
+#include "crc_kermit.h"
+#include "cc1101.h"		 // For tmeter_data struct
+// private.h is pulled in ahead of wifi_serial.h so WIFI_SERIAL_MONITOR_ENABLED is
+// already known when the mirror decides whether to compile itself in. Not strictly
+// required (wifi_serial.h falls back to including private.h itself), but it keeps
+// the dependency visible at the top of the file.
+#if !defined(USE_ESPHOME)
+#if defined(__has_include)
+#if __has_include("private.h")
+#include "private.h" // Configuration file (Wi-Fi, MQTT, meter settings)
+#endif
+#else
+/* No __has_include support; skip optional private.h */
+#endif
+#endif
+#include "wifi_serial.h" // Mirror Serial to WiFi
+#include "logging.h"	 // Cross-platform logging
+
+#include <string.h>
+
+// When true, echo_debug() output is suppressed (see utils.h).
+bool g_echo_debug_quiet = false;
+
+// Emit the accumulated line and start a new one.
+static void flush_hex_line(char *line_buf, int &line_pos)
+{
+	if (line_pos > 0)
+	{
+		line_buf[line_pos] = '\0';
+		LOG_D("everblu_meter", "%s", line_buf);
+		line_pos = 0;
+	}
+}
+
+// Consolidated hex display function with optional formatting
+// mode: 0=16 per line with newlines, 1=array format, 2=single line, 3=single line with 'S' separator
+//
+// Modes 2 and 3 describe a single logical line whose length grows with the
+// buffer, so the output is wrapped once it fills line_buf. Without that wrap a
+// buffer longer than about 85 bytes walked off the end of the stack array: a
+// full 124-byte RADIAN frame needs 372 characters. snprintf() returns the
+// length it *would* have written, so line_pos ran past the buffer size and the
+// remaining-space argument, computed as an unsigned difference, underflowed to
+// a huge value instead of clamping.
+void show_in_hex_formatted(const uint8_t *buffer, size_t len, int mode)
+{
+	if (buffer == nullptr)
+	{
+		return;
+	}
+
+	char line_buf[256];
+	int line_pos = 0;
+
+	// Longest chunk any mode appends ("0x%02X, ") plus its terminator.
+	const int MAX_CHUNK = 7;
+
+	for (size_t i = 0; i < len; i++)
+	{
+		if ((mode == 0 || mode == 1) && i > 0 && (i % 16) == 0)
+		{
+			// Fixed 16 bytes per line.
+			flush_hex_line(line_buf, line_pos);
+		}
+		else if (line_pos + MAX_CHUNK > (int)sizeof(line_buf))
+		{
+			// Would not fit: wrap before writing rather than overrun.
+			flush_hex_line(line_buf, line_pos);
+		}
+
+		const int space = (int)sizeof(line_buf) - line_pos;
+		int written = 0;
+
+		if (mode == 0 || mode == 2)
+		{
+			written = snprintf(line_buf + line_pos, (size_t)space, "%02X ", buffer[i]);
+		}
+		else if (mode == 1)
+		{
+			written = snprintf(line_buf + line_pos, (size_t)space, "0x%02X, ", buffer[i]);
+		}
+		else if (mode == 3)
+		{
+			written = snprintf(line_buf + line_pos, (size_t)space, "%02XS", buffer[i]);
+		}
+
+		if (written > 0 && written < space)
+		{
+			line_pos += written;
+		}
+	}
+
+	flush_hex_line(line_buf, line_pos);
+}
+
+// Legacy function wrappers for backwards compatibility
+void show_in_hex(const uint8_t *buffer, size_t len)
+{
+	show_in_hex_formatted(buffer, len, 0);
+}
+
+void show_in_hex_array(const uint8_t *buffer, size_t len)
+{
+	show_in_hex_formatted(buffer, len, 1);
+}
+
+void show_in_hex_one_line(const uint8_t *buffer, size_t len)
+{
+	show_in_hex_formatted(buffer, len, 2);
+}
+
+void show_in_hex_one_line_GET(const uint8_t *buffer, size_t len)
+{
+	show_in_hex_formatted(buffer, len, 3);
+}
+
+void show_in_bin(const uint8_t *buffer, size_t len)
+{
+	if (buffer == nullptr)
+	{
+		return;
+	}
+
+	const uint8_t *ptr;
+	uint8_t mask;
+	char bin_buf[512];
+	size_t bin_pos = 0;
+
+	for (ptr = buffer; len--; ptr++)
+	{
+		for (mask = 0x80; mask; mask >>= 1)
+		{
+			bin_buf[bin_pos++] = (mask & *ptr) > 0 ? '1' : '0';
+			if (bin_pos >= sizeof(bin_buf) - 2)
+				break;
+		}
+		bin_buf[bin_pos++] = ' ';
+		if (bin_pos >= sizeof(bin_buf) - 1)
+			break;
+	}
+
+	if (bin_pos > 0)
+	{
+		bin_buf[bin_pos] = '\0';
+		LOG_D("everblu_meter", "%s", bin_buf);
+	}
+}
+
+int calculateMeterdBmToPercentage(int rssi_dbm)
+{
+	// NOTE: the -120..-40 dBm scale is an arbitrary display convenience, not a
+	// calibrated measurement. It exists so Home Assistant can show a signal bar;
+	// the percentage has no physical meaning and the endpoints were picked to
+	// span roughly "unusable" to "right next to the meter". Judge link quality
+	// from the dBm and LQI values instead. Any change to these endpoints shifts
+	// every historical value in Home Assistant, so treat it as user-visible.
+	//
+	// This is the single implementation for both builds: the ESPHome publisher
+	// delegates here so its sensor cannot drift away from the device log.
+
+	// Clamp RSSI to a reasonable range (e.g., -120 dBm to -40 dBm)
+	int clamped_rssi = constrain(rssi_dbm, -120, -40);
+
+	// Map the clamped RSSI value to a percentage (0-100%)
+	return map(clamped_rssi, -120, -40, 0, 100);
+}
+
+int calculateLQIToPercentage(int lqi)
+{
+	int error = constrain(lqi & 0x7F, 0, 127); // Mask bit 7 (CRC_OK) and clamp to the 7-bit LQI range
+	// CC1101 LQI is an accumulated demodulation-error metric: a LOWER value means a better link.
+	// Invert the mapping so the reported percentage follows the intuitive "higher % = better link".
+	return map(error, 0, 127, 100, 0);
+}
+void printMeterDataSummary(const struct tmeter_data *meter_data, bool isMeterGas, int volumeDivisor)
+{
+	if (!meter_data)
+		return;
+
+	// Validate and set default volumeDivisor
+	if (volumeDivisor <= 0)
+		volumeDivisor = 100;
+
+	const char *volumeLabel = isMeterGas ? "Volume (m3)" : "Volume (L)";
+
+	char timeStartFormatted[6];
+	char timeEndFormatted[6];
+	int timeStart = constrain(meter_data->time_start, 0, 23);
+	int timeEnd = constrain(meter_data->time_end, 0, 23);
+	snprintf(timeStartFormatted, sizeof(timeStartFormatted), "%02d:00", timeStart);
+	snprintf(timeEndFormatted, sizeof(timeEndFormatted), "%02d:00", timeEnd);
+
+	LOG_I("everblu_meter", "=== METER DATA ===");
+	if (isMeterGas)
+	{
+		float cubicMeters = meter_data->volume / (float)volumeDivisor;
+		LOG_I("everblu_meter", "%-25s: %.3f", volumeLabel, cubicMeters);
+	}
+	else
+	{
+		LOG_I("everblu_meter", "%-25s: %d", volumeLabel, meter_data->volume);
+	}
+	LOG_I("everblu_meter", "%-25s: %d", "Battery (months)", meter_data->battery_left);
+	LOG_I("everblu_meter", "%-25s: %d", "Counter", meter_data->reads_counter);
+	LOG_I("everblu_meter", "%-25s: %d", "RSSI (raw)", meter_data->rssi);
+	LOG_I("everblu_meter", "%-25s: %d dBm", "RSSI", meter_data->rssi_dbm);
+	LOG_I("everblu_meter", "%-25s: %d%%", "RSSI (percentage)", calculateMeterdBmToPercentage(meter_data->rssi_dbm));
+	LOG_I("everblu_meter", "%-25s: %d", "Signal quality (LQI)", meter_data->lqi);
+	LOG_I("everblu_meter", "%-25s: %d%%", "LQI (percentage)", calculateLQIToPercentage(meter_data->lqi));
+	LOG_I("everblu_meter", "%-25s: %s", "Time window start", timeStartFormatted);
+	LOG_I("everblu_meter", "%-25s: %s", "Time window end", timeEndFormatted);
+	LOG_I("everblu_meter", "==================");
+}
+void echo_debug(bool l_flag, const char *fmt, ...)
+{
+	if (!l_flag || g_echo_debug_quiet)
+		return;
+
+	va_list args;
+	va_start(args, fmt);
+
+	char buf[256];
+	vsnprintf(buf, sizeof(buf), fmt, args);
+
+#if defined(USE_ESPHOME)
+	// ESPHome mode: Route through LOG system for WiFi-visible logs
+	// Strip trailing newline if present (LOG_* adds it automatically)
+	size_t len = strlen(buf);
+	if (len > 0 && buf[len - 1] == '\n')
+		buf[len - 1] = '\0';
+	// Use INFO level so messages are always visible in WiFi logs
+	LOG_I("everblu_meter", "%s", buf);
+#else
+	// MQTT mode: `Serial` is remapped to the WiFi mirror by wifi_serial.h when the
+	// monitor is enabled, and is the plain hardware UART when it is not.
+	// Colourise based on the leading "[TAG]" token (e.g. [METER], [FREQ]) so
+	// the VS Code terminal / PlatformIO monitor is easier to scan. The RESET is
+	// emitted before any trailing newline to avoid colouring blank line breaks.
+	const char *col = everblu_log_color_for_prefix(buf);
+	const char *ts = everblu_log_timestamp();
+	if (col[0] != '\0')
+	{
+		size_t len = strlen(buf);
+		bool hasNewline = (len > 0 && buf[len - 1] == '\n');
+		if (hasNewline)
+			buf[len - 1] = '\0';
+		Serial.print(ts);
+		Serial.print(col);
+		Serial.print(buf);
+		Serial.print(EVB_ANSI_RESET);
+		if (hasNewline)
+			Serial.print('\n');
+	}
+	else
+	{
+		Serial.print(ts);
+		Serial.print(buf);
+	}
+#endif
+
+	va_end(args);
+}
+
+void print_time(void)
+{ /*
+	 time_t mytime;
+	 mytime = time(NULL);
+	 printf(ctime(&mytime));*/
+
+	time_t rawtime;
+	struct tm *timeinfo;
+	char buffer[80];
+
+	time(&rawtime);
+	timeinfo = localtime(&rawtime);
+
+	strftime(buffer, 80, "%d/%m/%Y %X", timeinfo);
+	LOG_D("everblu_meter", "%s", buffer);
+}
+
+/*----------------------------------------------------------------------------*/
+/**
+ * Reverses the bit order of the input data and adds a start bit before and a stop bit
+ * after each byte.
+ *
+ * @param inputBuffer Points to the unencoded data.
+ * @param inputBufferLen Number of bytes of unencoded data.
+ * @param outputBuffer Points to the encoded data.
+ * @param outputBufferLen Number of bytes of encoded data.
+ */
+int encode2serial_1_3(uint8_t *inputBuffer, int inputBufferLen, uint8_t *outputBuffer)
+{
+
+	// Adds a start and stop bit and reverses the bit order.
+	// 76543210 76543210 76543210 76543210
+	// is encoded to:
+	// #0123456 7###0123 4567###0 1234567# ##012345 6s7# (# -> Start/Stop bit)
+
+	int bytepos = 0;
+	int bitpos = 0;
+	int i;
+	int j = 0;
+
+	for (i = 0; i < (inputBufferLen * 8); i++)
+	{
+		// printf("\ni=%u",i);
+		if (i % 8 == 0)
+		{
+			if (i > 0)
+			{
+				// printf(" j=%u stopBIT",j);
+				//  Insert stop bit (3)
+				bytepos = j / 8;
+				bitpos = j % 8;
+				outputBuffer[bytepos] |= 1 << (7 - bitpos);
+				j++;
+
+				bytepos = j / 8;
+				bitpos = j % 8;
+				outputBuffer[bytepos] |= 1 << (7 - bitpos);
+				j++;
+
+				bytepos = j / 8;
+				bitpos = j % 8;
+				outputBuffer[bytepos] |= 1 << (7 - bitpos);
+				j++;
+			} // stop bit
+
+			// Insert start bit (0)
+			bytepos = j / 8;
+			bitpos = j % 8;
+			// printf(" j=%u startBIT",j);
+			outputBuffer[bytepos] &= ~(1 << (7 - bitpos));
+			j++;
+		} // start stop bit
+
+		bytepos = i / 8;
+		bitpos = i % 8;
+		uint8_t mask = 1 << bitpos;
+		if ((inputBuffer[bytepos] & mask) > 0)
+		{
+			bytepos = j / 8;
+			bitpos = 7 - (j % 8);
+			outputBuffer[bytepos] |= 1 << bitpos;
+		}
+		else
+		{
+			bytepos = j / 8;
+			bitpos = 7 - (j % 8);
+			outputBuffer[bytepos] &= ~(1 << bitpos);
+		}
+
+		j++;
+	} // for
+
+	// insert additional stop bit until end of byte
+	while (j % 8 > 0)
+	{
+		bytepos = j / 8;
+		bitpos = 7 - (j % 8);
+		outputBuffer[bytepos] |= 1 << bitpos;
+		j++;
+	}
+	outputBuffer[bytepos + 1] = 0xFF;
+	return bytepos + 2;
+}
+
+int Make_Radian_Master_req(uint8_t *outputBuffer, uint8_t year, uint32_t serial)
+{
+	uint16_t crc;
+	uint8_t to_encode[] = {0x13, 0x10, 0x00, 0x45, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x45, 0x20, 0x0A, 0x50, 0x14, 0x00, 0x0A, 0x40, 0xFF, 0xFF}; // the last 2 bytes are reserved for the CRC as well as the serial number
+	uint8_t synch_pattern[] = {0x50, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF, 0xFF, 0xFF};
+	uint8_t TS_len_u8;
+
+	to_encode[4] = year;
+	to_encode[5] = (uint8_t)((serial & 0x00FF0000) >> 16);
+	to_encode[6] = (uint8_t)((serial & 0x0000FF00) >> 8);
+	to_encode[7] = (uint8_t)(serial & 0x000000FF);
+	crc = crc_kermit(to_encode, sizeof(to_encode) - 2);
+	// printf("crc:%x\n",crc);
+	to_encode[sizeof(to_encode) - 2] = (uint8_t)((crc & 0xFF00) >> 8);
+	to_encode[sizeof(to_encode) - 1] = (uint8_t)(crc & 0x00FF);
+	// show_in_hex_one_line(to_encode,sizeof(to_encode));
+	memcpy(outputBuffer, synch_pattern, sizeof(synch_pattern));
+	TS_len_u8 = encode2serial_1_3(to_encode, sizeof(to_encode), &outputBuffer[sizeof(synch_pattern)]);
+	return TS_len_u8 + sizeof(synch_pattern);
+}
+
+// -----------------------------------------------------------------------------
+// Configuration validation helpers
+// -----------------------------------------------------------------------------
+
+bool isValidReadingSchedule(const char *schedule)
+{
+	// Reject null or empty schedules
+	if (schedule == nullptr || schedule[0] == '\0')
+	{
+		return false;
+	}
+
+	// Allowed values based on unit tests
+	if (strcmp(schedule, "Monday-Friday") == 0)
+		return true;
+	if (strcmp(schedule, "Monday-Saturday") == 0)
+		return true;
+	if (strcmp(schedule, "Monday-Sunday") == 0)
+		return true;
+	if (strcmp(schedule, "Never") == 0)
+		return true;
+	if (strcmp(schedule, "Monday") == 0)
+		return true;
+	if (strcmp(schedule, "Tuesday") == 0)
+		return true;
+	if (strcmp(schedule, "Wednesday") == 0)
+		return true;
+	if (strcmp(schedule, "Thursday") == 0)
+		return true;
+	if (strcmp(schedule, "Friday") == 0)
+		return true;
+	if (strcmp(schedule, "Saturday") == 0)
+		return true;
+	if (strcmp(schedule, "Sunday") == 0)
+		return true;
+
+	// Everything else is considered invalid for now
+	return false;
+}

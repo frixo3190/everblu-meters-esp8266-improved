@@ -34,6 +34,7 @@ bool ScheduleManager::isValidSchedule(const char *schedule)
     return (strcmp(schedule, "Monday-Friday") == 0 ||
             strcmp(schedule, "Monday-Saturday") == 0 ||
             strcmp(schedule, "Monday-Sunday") == 0 ||
+            strcmp(schedule, "Never") == 0 ||
             strcmp(schedule, "Monday") == 0 ||
             strcmp(schedule, "Tuesday") == 0 ||
             strcmp(schedule, "Wednesday") == 0 ||
@@ -70,6 +71,12 @@ bool ScheduleManager::isReadingDay(struct tm *ptm)
 
     // ptm->tm_wday: 0=Sunday, 1=Monday, ..., 6=Saturday
     int dayOfWeek = ptm->tm_wday;
+
+    // Scheduled reads explicitly disabled: only manual triggers will read.
+    if (strcmp(s_schedule, "Never") == 0)
+    {
+        return false;
+    }
 
     if (strcmp(s_schedule, "Monday-Friday") == 0)
     {

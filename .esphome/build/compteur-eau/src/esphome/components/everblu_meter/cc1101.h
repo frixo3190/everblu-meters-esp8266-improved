@@ -1,0 +1,398 @@
+/**
+ * @file cc1101.h
+ * @brief CC1101 radio driver for Everblu Cyble water/gas meter communication
+ *
+ * This header defines the interface for communicating with Everblu Cyble
+ * water and gas meters using the CC1101 sub-GHz radio transceiver and the RADIAN protocol.
+ * Supports adaptive frequency tracking and historical data extraction.
+ */
+
+#ifndef __CC1101_H__
+#define __CC1101_H__
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#ifdef USE_ESPHOME
+/**
+ * @brief Configure CC1101 to use ESPHome SPI device
+ *
+ * Must be called before cc1101_init() when compiling with ESPHome.
+ * Provides the SPI device used for CC1101 communication.
+ *
+ * @param device Pointer to ESPHome SPIDevice instance (as void* for generic handling)
+ */
+void cc1101_set_spi_device(void *device);
+
+/**
+ * @brief Set GDO0 pin for ESPHome mode
+ *
+ * Must be called before cc1101_init() when compiling with ESPHome.
+ *
+ * @param gdo0_pin GPIO pin number for GDO0 interrupt signal
+ */
+void cc1101_set_gdo0_pin(int gdo0_pin);
+
+/**
+ * @brief Set GDO2 pin for ESPHome mode (optional)
+ *
+ * When configured, GDO2 is used as a hardware FIFO threshold signal whose
+ * meaning is switched dynamically per phase via IOCFG2:
+ *   - TX phase (IOCFG2 = 0x02): asserts HIGH when the TX FIFO is at/above the
+ *     threshold, replacing SPI-based TXBYTES polling in the TX feeding loop and
+ *     preventing TXFIFO_UNDERFLOW under scheduler load.
+ *   - RX phase (IOCFG2 = 0x01): asserts HIGH when the RX FIFO reaches the
+ *     threshold OR at end-of-packet, letting the RX drain loop skip unnecessary
+ *     RXBYTES SPI reads while still draining the FIFO promptly.
+ * If not called (or called with -1), the driver falls back to SPI polling
+ * (CC1101_status_FIFO_FreeByte + delay on TX, blind RXBYTES polling on RX).
+ *
+ * Wiring: connect CC1101 GDO2 to any free GPIO that is not used by the SPI bus
+ * or GDO0. Leaving GDO2 unwired is fully supported via the SPI-polling fallback.
+ *
+ * @param gdo2_pin GPIO pin number connected to CC1101 GDO2, or -1 to disable
+ */
+void cc1101_set_gdo2_pin(int gdo2_pin);
+
+/**
+ * @brief Set the front-end RX input attenuation level (ESPHome mode).
+ *
+ * Must be called before cc1101_init() when compiling with ESPHome.
+ * Limits the CC1101 LNA gain via the AGCCTRL2 MAX_LNA_GAIN field to prevent
+ * front-end saturation when the device is permanently mounted close to the meter.
+ *
+ * @param db Attenuation in dB. Accepted values: 0 (default), 6, 12, 18.
+ *           Values are rounded down to the nearest supported step.
+ *           Actual hardware reduction is approximate (6.1 / 11.5 / 17.1 dB).
+ */
+void cc1101_set_rx_attenuation(int db);
+#endif
+
+/**
+ * @brief Number of GDO2 FIFO-threshold faults observed (stuck-HIGH timeouts + failed self-test).
+ *
+ * Lifetime (monotonic) diagnostic counter incremented from two sources:
+ *   - the boot-time GDO2 wiring self-test in cc1101_init() when GDO2 does not toggle
+ *     LOW->HIGH across a known empty->filled TX FIFO transition; and
+ *   - the runtime TX interrogation-frame gate, when GDO2 never indicates the FIFO has
+ *     drained below threshold within the safety window.
+ * A non-zero, growing value strongly indicates a miswired / wrong-GPIO / disconnected
+ * GDO2 rather than an RF or meter problem.
+ *
+ * @return Cumulative count since boot. Always 0 when GDO2 is not configured.
+ */
+uint32_t cc1101_get_gdo2_timeout_count(void);
+
+/**
+ * @brief Probe the SPI link to the CC1101 without configuring the radio.
+ *
+ * Performs the same reset + write/read-back self-test as cc1101_init(), but stops there.
+ * Intended to be called early (for example from an ESPHome setup()) so a dead or
+ * mis-wired SPI link is reported in the boot log, rather than only surfacing later when
+ * the first read is attempted. Failures are logged with the same remediation guidance.
+ *
+ * @param partnum_out Optional; receives the PARTNUM register value.
+ * @param version_out Optional; receives the VERSION register value.
+ * @return true when the radio answered and the bus is trustworthy.
+ */
+bool cc1101_probe_spi_link(uint8_t *partnum_out, uint8_t *version_out);
+
+/** Self-test verdict: the test has not run, so nothing is known either way. */
+#define CC1101_SELFTEST_NOT_RUN (-1)
+/** Self-test verdict: the test ran and passed. */
+#define CC1101_SELFTEST_PASSED (0)
+/** Self-test verdict: the test ran and failed. */
+#define CC1101_SELFTEST_FAILED (1)
+
+/**
+ * @brief Snapshot of radio identity, key registers and GDO line levels.
+ *
+ * Everything a support request needs in order to tell a wiring fault from an RF problem,
+ * captured in one pass so it can be logged as a single copy-pasteable block.
+ */
+typedef struct
+{
+  bool link_ok;      /**< SPI write/read-back self-test passed */
+  uint8_t partnum;   /**< PARTNUM: 0x00 on a genuine CC1101 */
+  uint8_t version;   /**< VERSION: 0x04 or 0x14 on known revisions */
+  uint8_t marcstate; /**< Main radio control state machine state */
+  uint8_t freq2;     /**< Carrier frequency, MSB */
+  uint8_t freq1;
+  uint8_t freq0;
+  /**
+   * Carrier frequency decoded from FREQ2/1/0, in MHz.
+   *
+   * Read back from the radio, so this is where it is actually tuned. It differs from the
+   * configured base frequency by whatever calibration offset is in effect, which is the
+   * point: a mismatch between the two is otherwise invisible without doing the arithmetic
+   * by hand.
+   */
+  float carrier_mhz;
+  uint8_t mdmcfg4; /**< RX filter bandwidth + data rate exponent */
+  uint8_t mdmcfg3;
+  uint8_t mdmcfg2;
+  uint8_t pktctrl0;
+  int8_t rssi_dbm; /**< Current RSSI, converted to dBm */
+  uint8_t lqi;
+  /**
+   * GDO0 line level: 0 = LOW, 1 = HIGH, -1 = unknown.
+   *
+   * Unknown means the pin has not been configured as an input yet (cc1101_init() has not
+   * run), so sampling it would report a floating pin rather than a signal.
+   */
+  int gdo0_level;
+  int gdo2_level; /**< GDO2 line level; same encoding as gdo0_level. */
+  /**
+   * Verdict of the GDO0 idle-level self-test run by cc1101_init(), as one of
+   * CC1101_SELFTEST_NOT_RUN / _PASSED / _FAILED.
+   *
+   * FAILED means GDO0 read HIGH while the radio was IDLE, so the pin is almost certainly
+   * on the wrong GPIO or not connected; sync-word waits then return instantly and
+   * "received" frames are noise. NOT_RUN is reported separately from PASSED because a
+   * diagnostic snapshot is most often taken when the radio never came up, which is
+   * exactly when the self-test has not had a chance to run.
+   */
+  int8_t gdo0_selftest;
+} cc1101_diagnostics_t;
+
+/**
+ * @brief Fill @p out with a one-shot diagnostic snapshot of the radio.
+ *
+ * Does not reset or reconfigure the radio, but it is not purely passive: the SPI
+ * read-back check borrows SYNC1/SYNC0 as scratch registers, so the radio is parked in
+ * IDLE for the duration and returned to RX afterwards if that is where it was. When the
+ * SPI link is untrustworthy, link_ok is false and the register values are meaningless.
+ *
+ * @param out Destination struct; ignored when NULL.
+ */
+void cc1101_collect_diagnostics(cc1101_diagnostics_t *out);
+
+/**
+ * @brief Caller-supplied context for cc1101_print_diagnostic_report().
+ *
+ * The driver knows the radio but not how the surrounding firmware was configured, so the
+ * caller passes in the parts of the report it owns. Pin descriptions are strings rather
+ * than numbers because ESPHome describes a pin as more than a GPIO number (inverted,
+ * pull-up, expander), and the MQTT build has no pin object at all.
+ *
+ * String members may be NULL; they are printed as "unknown" rather than crashing.
+ * A NULL pin description falls back to the GPIO numbers the driver is actually using.
+ */
+typedef struct
+{
+  const char *meter_code;         /**< Meter code as configured, e.g. "21-0123456". */
+  uint16_t meter_year;            /**< Two-digit production year parsed from the meter code. */
+  uint32_t meter_serial;          /**< Serial number parsed from the meter code. */
+  bool is_gas;                    /**< true for a gas meter, false for water. */
+  float configured_frequency_mhz; /**< Base frequency before any calibration offset. */
+  int rx_attenuation_db;          /**< Configured front-end RX attenuation. */
+  const char *cs_pin_text;        /**< Chip-select pin description; NULL to derive one. */
+  const char *gdo0_pin_text;      /**< GDO0 pin description; NULL to derive one. */
+  const char *gdo2_pin_text;      /**< GDO2 pin description; NULL to derive one. */
+  bool meter_initialised;         /**< Whether the meter reader finished setting up. */
+} cc1101_report_context_t;
+
+/**
+ * @brief Buffer size that always holds a complete diagnostic report, including the
+ *        terminating NUL.
+ *
+ * A worst-case report (every self-test failed, so every verdict is its long explanatory
+ * form) runs to a little under 1 kB. The report is truncated rather than overflowing if it
+ * ever outgrows this.
+ */
+#define CC1101_REPORT_BUFFER_SIZE 1280
+
+/**
+ * @brief Log a copy-pasteable diagnostic report covering wiring, link and radio state.
+ *
+ * Calls cc1101_collect_diagnostics() itself, then prints the snapshot alongside the
+ * caller-supplied configuration in @p ctx. Shared by the ESPHome component and the
+ * standalone MQTT firmware so both produce byte-for-byte comparable reports in a bug
+ * report. Safe to call before the radio has been initialised: the SPI and GDO0 verdicts
+ * then report "FAILED"/"NOT RUN" rather than a misleading pass.
+ *
+ * @param ctx Configuration context; a NULL pointer prints the radio half only.
+ * @return The same text that was logged, NUL-terminated, in a static buffer that stays
+ *         valid until the next call. Lets a caller publish the report as well as log it
+ *         without probing the radio a second time. Never NULL.
+ */
+const char *cc1101_print_diagnostic_report(const cc1101_report_context_t *ctx);
+
+/**
+ * @brief Human-readable name for a MARCSTATE value (datasheet Table 25).
+ *
+ * Reported as a bare number, a state such as 0x11 reads as a fault when it is usually
+ * just a receiver parked with nothing draining the FIFO.
+ *
+ * @param marcstate Raw MARCSTATE register value.
+ * @return Static string, never NULL; "unknown" for undefined values.
+ */
+const char *cc1101_marcstate_name(uint8_t marcstate);
+
+/**
+ * @brief Convert the CC1101 FREQ2/FREQ1/FREQ0 register triple to MHz.
+ *
+ * Inverse of setMHZ(): f_carrier = FREQ * f_xosc / 2^16, with a 26 MHz crystal.
+ *
+ * @return Carrier frequency in MHz.
+ */
+float cc1101_freq_registers_to_mhz(uint8_t freq2, uint8_t freq1, uint8_t freq0);
+
+/**
+ * @enum ReadFailure
+ * @brief Why a meter read produced no usable data
+ *
+ * Lets the caller tell a silent meter apart from a marginal RF link, so the
+ * status and error messages point at the right remedy.
+ */
+enum class ReadFailure : uint8_t
+{
+  None = 0,      // No failure recorded (read succeeded, or not attempted)
+  NotAttempted,  // Radio never keyed: meter identity missing or unusable
+  NoReply,       // No frame arrived within the timeout window
+  CrcFailed,     // A frame arrived but failed the RADIAN CRC (corrupted)
+  ParseRejected  // Frame passed CRC but the primary meter fields were invalid
+};
+
+/**
+ * @brief Short suffix describing a failure, for appending to a log line
+ * @param reason Failure classification from tmeter_data::failure
+ * @return Suffix beginning with " - ", or "" when there is nothing to add
+ */
+inline const char *read_failure_log_suffix(ReadFailure reason)
+{
+  switch (reason)
+  {
+  case ReadFailure::NotAttempted:
+    return " - meter identity not configured, radio not keyed";
+  case ReadFailure::CrcFailed:
+    return " - corrupted frame (failed CRC)";
+  case ReadFailure::ParseRejected:
+    return " - frame received but meter fields invalid";
+  default:
+    return "";
+  }
+}
+
+/**
+ * @brief User-facing error text for a failed read
+ *
+ * Split by symptom so the suggested remedy matches the actual cause: a silent
+ * meter points at range/identity, whereas a corrupted frame points at RF
+ * quality or carrier drift. NotAttempted is neither, and must not be reported
+ * as a radio symptom: the transceiver was never keyed.
+ *
+ * @param reason Failure classification from tmeter_data::failure
+ * @param retrying true while retries remain, false for the final message
+ * @return Static string, safe to store as a const char *
+ */
+inline const char *read_failure_message(ReadFailure reason, bool retrying)
+{
+  switch (reason)
+  {
+  case ReadFailure::NotAttempted:
+    // Retrying cannot help a configuration error, so both texts say the same thing.
+    return "Meter identity not configured - check METER_CODE (expected YY-SSSSSSS)";
+  case ReadFailure::CrcFailed:
+    return retrying
+               ? "Corrupted frame received - failed CRC (weak signal or frequency offset)"
+               : "Corrupted frames after max retries - improve signal or run a frequency scan";
+  case ReadFailure::ParseRejected:
+    return retrying
+               ? "Frame received but meter fields invalid - check meter Year/Serial"
+               : "Frames received but meter fields invalid after max retries - check meter Year/Serial";
+  default:
+    return retrying
+               ? "No meter response (asleep/out of range/wrong Year/Serial)"
+               : "No meter response after max retries - check distance and meter Year/Serial";
+  }
+}
+
+/**
+ * @struct tmeter_data
+ * @brief Meter data structure containing current readings and metadata
+ *
+ * Contains all data extracted from an Everblu Cyble water/gas meter reading,
+ * including current consumption, historical data, signal quality metrics,
+ * and battery information.
+ */
+struct tmeter_data
+{
+  int volume;             // Current consumption reading in liters (water) or cubic meters (gas)
+  int reads_counter;      // Number of times meter has been read (wraps around 255→1)
+  int battery_left;       // Estimated battery life remaining in months
+  int time_start;         // Reading window start time (24-hour format, e.g., 8 = 8am)
+  int time_end;           // Reading window end time (24-hour format, e.g., 18 = 6pm)
+  int rssi;               // Radio Signal Strength Indicator (raw value)
+  int rssi_dbm;           // RSSI converted to dBm
+  int lqi;                // Link Quality Indicator (0-127, lower is better; CRC_OK bit masked)
+  int8_t freqest;         // Frequency offset estimate from CC1101 for adaptive tracking
+  uint32_t history[13];   // Monthly historical readings (13 months), index 0 = oldest, 12 = most recent
+  bool history_available; // True if historical data was successfully extracted
+  char meter_time[32];    // Meter real-time clock "YYYY-MM-DD HH:MM:SS" (empty if not decoded)
+  char meter_type[12];    // Meter type/identifier ASCII string, e.g. "133290AL02" (empty if not decoded)
+  ReadFailure failure;    // Why the read produced no usable data (None on success)
+};
+
+/**
+ * @brief Set the CC1101 radio frequency in MHz
+ *
+ * Configures the CC1101 transceiver to operate at the specified frequency.
+ * Used for fine-tuning frequency to match meter transmissions or for
+ * adaptive frequency tracking.
+ *
+ * @param mhz Frequency in MHz (typically around 433.82 MHz for Cyble meters)
+ */
+void setMHZ(float mhz);
+
+/**
+ * @brief Initialize the CC1101 radio transceiver
+ *
+ * Performs complete initialization of the CC1101 radio including:
+ * - SPI communication setup
+ * - Register configuration for RADIAN protocol
+ * - Frequency calibration
+ * - Power amplifier configuration
+ *
+ * @param freq Initial operating frequency in MHz
+ * @return true if initialization succeeded, false on failure
+ */
+bool cc1101_init(float freq);
+
+/**
+ * @brief Put CC1101 radio into receive (RX) mode
+ *
+ * Configures the radio to listen for incoming meter transmissions.
+ * Must be called after initialization or frequency changes to enable reception.
+ */
+void cc1101_rec_mode(void);
+
+/**
+ * @brief Read data from Everblu Cyble water/gas meter
+ *
+ * Performs a complete read cycle:
+ * 1. Transmits RADIAN protocol request frame to meter
+ * 2. Waits for meter response
+ * 3. Decodes received data including current reading and history
+ * 4. Validates CRC and data integrity
+ * 5. Extracts signal quality metrics (RSSI, LQI, frequency offset)
+ *
+ * This is a blocking operation that may take several seconds to complete.
+ *
+ * @return tmeter_data structure containing all extracted meter data
+ */
+struct tmeter_data get_meter_data(void);
+
+/**
+ * @brief Read data from a specific meter identity
+ *
+ * Same as get_meter_data(), but uses explicit meter identification instead of
+ * compile-time defines. This is required for ESPHome multi-instance support.
+ *
+ * @param meter_year Last two digits of meter production year
+ * @param meter_serial Meter serial number
+ * @return tmeter_data structure containing all extracted meter data
+ */
+struct tmeter_data get_meter_data_for_meter(uint8_t meter_year, uint32_t meter_serial);
+
+#endif // __CC1101_H__

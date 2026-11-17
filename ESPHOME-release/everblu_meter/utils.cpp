@@ -416,6 +416,8 @@ bool isValidReadingSchedule(const char *schedule)
 		return true;
 	if (strcmp(schedule, "Monday-Sunday") == 0)
 		return true;
+	if (strcmp(schedule, "Never") == 0)
+		return true;
 	if (strcmp(schedule, "Monday") == 0)
 		return true;
 	if (strcmp(schedule, "Tuesday") == 0)

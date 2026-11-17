@@ -1,0 +1,240 @@
+/**
+ * @file meter_reader.h
+ * @brief Orchestrator for meter reading operations
+ *
+ * Coordinates meter reading, scheduling, and data publishing using
+ * abstract interfaces. This is the main entry point for meter operations
+ * and is platform-agnostic through dependency injection.
+ *
+ * Usage:
+ * ```cpp
+ * MeterReader reader(configProvider, timeProvider, dataPublisher);
+ * reader.begin();
+ * // In loop:
+ * reader.loop();
+ * // Manual trigger:
+ * reader.triggerReading(false); // false = not scheduled
+ * ```
+ */
+
+#ifndef METER_READER_H
+#define METER_READER_H
+
+#if __has_include("../adapters/config_provider.h")
+#include "config_provider.h"
+#elif __has_include("config_provider.h")
+#include "config_provider.h"
+#else
+#error "Missing config_provider.h"
+#endif
+
+#if __has_include("../adapters/time_provider.h")
+#include "time_provider.h"
+#elif __has_include("time_provider.h")
+#include "time_provider.h"
+#else
+#error "Missing time_provider.h"
+#endif
+
+#if __has_include("../adapters/data_publisher.h")
+#include "data_publisher.h"
+#elif __has_include("data_publisher.h")
+#include "data_publisher.h"
+#else
+#error "Missing data_publisher.h"
+#endif
+#include "cc1101.h"
+#include "frequency_manager.h"
+
+/**
+ * @class MeterReader
+ * @brief Orchestrates meter reading operations with scheduling
+ *
+ * This class is the core coordinator for all meter reading operations.
+ * It uses dependency injection to work with different platforms
+ * (standalone MQTT, ESPHome, etc.) without modification.
+ */
+class MeterReader
+{
+public:
+    /**
+     * @brief Constructor
+     * @param config Configuration provider
+     * @param timeProvider Time synchronization provider
+     * @param publisher Data publisher
+     */
+    MeterReader(IConfigProvider *config, ITimeProvider *timeProvider, IDataPublisher *publisher);
+
+    /**
+     * @brief Initialize meter reader and subsystems
+     *
+     * Initializes:
+     * - CC1101 radio
+     * - FrequencyManager
+     * - Scheduling engine
+     */
+    void begin();
+
+    /**
+     * @brief Main loop processing
+     *
+     * Should be called regularly from main loop.
+     * Handles:
+     * - Schedule checking
+     * - Retry management
+     * - Statistics updates
+     */
+    void loop();
+
+    /**
+     * @brief Trigger a manual meter reading
+     * @param isScheduled true if triggered by schedule, false if manual
+     */
+    void triggerReading(bool isScheduled);
+
+    /**
+     * @brief Start a Deep frequency scan (window-map + zoom) to recalibrate the carrier offset
+     *
+     * Returns immediately: the scan is then stepped from loop(), so the host stays
+     * responsive and stopReading() can abort it mid-scan.
+     */
+    void performFrequencyScan();
+
+    /**
+     * @brief Check whether a deep frequency scan is currently running
+     * @return true while the scan state machine is being stepped
+     */
+    bool isScanInProgress() const { return m_scanInProgress; }
+
+    /**
+     * @brief Reset frequency offset to 0
+     */
+    void resetFrequencyOffset();
+
+    /**
+     * @brief Stop the current reading sequence
+     *
+     * Cancels any pending retry and returns the reader to idle so it stops
+     * retrying and does not start the next queued read. Also aborts an in-progress
+     * deep frequency scan at its next step boundary. A blocking RF transfer that is
+     * already in flight cannot be interrupted mid-transaction.
+     */
+    void stopReading();
+
+    /**
+     * @brief Get current read statistics
+     * @param totalAttempts Output: total read attempts
+     * @param successfulReads Output: successful reads
+     * @param failedReads Output: failed reads
+     */
+    void getStatistics(unsigned long &totalAttempts, unsigned long &successfulReads,
+                       unsigned long &failedReads) const;
+
+    /**
+     * @brief Check if a reading is currently in progress
+     * @return true if reading active
+     */
+    bool isReadingInProgress() const { return m_readingInProgress; }
+
+    /**
+     * @brief Check if CC1101 radio initialized successfully
+     * @return true if radio is connected and initialized
+     */
+    bool isRadioConnected() const { return m_radioConnected; }
+
+    /**
+     * @brief Get last error message
+     * @return Error message string
+     */
+    const char *getLastError() const { return m_lastErrorMessage; }
+
+    /**
+     * @brief Set Home Assistant connection state (ESPHome builds)
+     * @param connected true when HA is connected via ESPHome API
+     */
+    void setHAConnected(bool connected);
+
+private:
+    static MeterReader *s_active_reader;
+
+    static bool radioInitCallback(float freq);
+    static tmeter_data meterReadCallback();
+
+    void activateCallbackContext();
+    bool isReadingDayForConfiguredSchedule(const struct tm *ptm) const;
+
+    /**
+     * @brief Perform actual meter reading operation
+     *
+     * Handles:
+     * - Radio communication
+     * - Data validation
+     * - Retry logic
+     * - Publishing results
+     */
+    void performReading();
+
+    /**
+     * @brief Check if it's time for a scheduled reading
+     * @return true if schedule conditions are met
+     */
+    bool shouldPerformScheduledRead();
+
+    /**
+     * @brief Handle successful reading
+     * @param data Meter data
+     */
+    void handleSuccessfulRead(const tmeter_data &data);
+
+    /**
+     * @brief Handle failed reading attempt
+     * @param reason Why the attempt produced no usable data
+     */
+    void handleFailedRead(ReadFailure reason);
+
+    /**
+     * @brief Reset retry counter and cooldown
+     */
+    void resetRetryState();
+
+    // Dependencies (injected)
+    IConfigProvider *m_config;
+    ITimeProvider *m_timeProvider;
+    IDataPublisher *m_publisher;
+
+    // State tracking
+    bool m_initialized;
+    bool m_readingInProgress;
+    bool m_isScheduledRead;
+    bool m_haConnected;
+    bool m_radioConnected;  // Tracks CC1101 radio initialization success
+    bool m_scanInProgress;  // True while a non-blocking deep frequency scan is being stepped from loop()
+
+    // Retry management
+    int m_retryCount;
+    bool m_inCooldown;                // True while the post-failure cooldown is running
+    unsigned long m_lastFailedAttempt;
+    unsigned long m_nextRetryTime;
+    bool m_autoScanAfterFailureDone;  // Guards the failure-recovery frequency scan to once per failure streak
+    ReadFailure m_retryFailureReason; // Most informative failure seen so far in the current retry sequence
+
+    // Statistics
+    unsigned long m_totalReadAttempts;
+    unsigned long m_successfulReads;
+    unsigned long m_failedReads;
+
+    // Error tracking
+    const char *m_lastErrorMessage;
+
+    // Timing
+    unsigned long m_lastScheduleCheck;
+    unsigned long m_lastStatsPublish;
+
+    // Schedule state cache
+    int m_readHourLocal;
+    int m_readMinuteLocal;
+    bool m_lastReadDayMatch;
+    bool m_lastReadTimeMatch;
+};
+
+#endif // METER_READER_H
