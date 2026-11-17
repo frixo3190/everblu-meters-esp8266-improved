@@ -79,6 +79,9 @@ everblu_meter:
   # 60 = hiver (UTC+1), 120 = ete (UTC+2)
   timezone_offset: 60
   auto_align_time: true
+  reading_schedule: "Monday-Sunday"   # relevé tous les jour
+  read_hour: 4
+  read_minute: 0 
 
   # Lecture immediate apres synchro de l'heure : pratique pour le premier test.
   # A commenter/retirer une fois le montage valide.
