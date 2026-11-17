@@ -18,7 +18,7 @@ esp32:
     type: arduino          # obligatoire pour everblu_meter (pas ESP-IDF)
 
 logger:
-  level: DEBUG
+  level: INFO
 
 # Clé de chiffrement générée automatiquement - voir secrets.yaml
 api:
